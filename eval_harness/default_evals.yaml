@@ -1,0 +1,48 @@
+- name: gsm8k
+  dataset: openai/gsm8k
+  config: main
+  split: test
+  question_field: question
+  answer_field: answer
+  system_prompt: "Solve the math problem step by step. Put your final numerical answer after ####."
+  scorer: number_extract
+  delimiter: "####"
+
+- name: math
+  dataset: hendrycks/competition_math
+  split: test
+  question_field: problem
+  answer_field: solution
+  system_prompt: "Solve the math problem step by step. Put your final answer in \\boxed{}."
+  scorer: boxed_latex
+
+- name: mbpp
+  dataset: google-research-datasets/mbpp
+  split: test
+  filter: "task_id >= 11 and task_id <= 510"
+  question_field: text
+  answer_field: test_list
+  system_prompt: "Write a Python function to solve the problem. Only output the function definition, no explanation."
+  scorer: code_exec
+  formatter: code_completion
+
+- name: humaneval
+  dataset: openai/openai_humaneval
+  split: test
+  question_field: prompt
+  answer_field: test
+  system_prompt: "Complete the function. Only output the code to complete the function, no explanation."
+  scorer: code_exec
+  formatter: code_completion
+  prepend_prompt: true
+
+- name: arc
+  dataset: allenai/ai2_arc
+  config: ARC-Challenge
+  split: test
+  question_field: question
+  answer_field: answerKey
+  system_prompt: "Answer the multiple choice question. Reply with only the letter (A, B, C, or D)."
+  scorer: letter_match
+  formatter: multiple_choice
+  choices_field: choices

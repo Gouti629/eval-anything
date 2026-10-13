@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "eval-harness"
+version = "0.1.0"
+description = "Lightweight LLM evaluation harness"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "transformers>=4.40",
+    "datasets>=2.0",
+    "tqdm",
+    "numpy",
+    "matplotlib",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+eval-harness = "eval_harness.cli:main"
