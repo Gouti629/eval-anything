@@ -73,7 +73,9 @@ class GenericEval:
             messages.append({"role": "system", "content": self.system_prompt})
         messages.append({"role": "user", "content": question})
 
-        return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, enable_thinking=False)
+        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        prompt = prompt.replace("<|im_start|>assistant\n<think>\n", "<|im_start|>assistant\n")
+        return prompt
 
     def _format_choices(self, choices) -> str:
         if isinstance(choices, dict) and "label" in choices and "text" in choices:
