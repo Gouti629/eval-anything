@@ -100,9 +100,9 @@ def _resolve_eval_configs(args) -> list[dict]:
 
 def _load_eval_config(path: str) -> list[dict]:
     import yaml
+    import importlib.resources
 
     if path == "default":
-        import importlib.resources
         ref = importlib.resources.files("eval_harness").joinpath("default_evals.yaml")
         text = ref.read_text(encoding="utf-8")
     else:

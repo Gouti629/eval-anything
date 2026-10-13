@@ -19,3 +19,6 @@ dependencies = [
 
 [project.scripts]
 eval-harness = "eval_harness.cli:main"
+
+[tool.setuptools.package-data]
+eval_harness = ["*.yaml"]
