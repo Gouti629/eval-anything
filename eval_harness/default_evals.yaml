@@ -9,7 +9,7 @@
   delimiter: "####"
 
 - name: math
-  dataset: hendrycks/competition_math
+  dataset: HuggingFaceTB/MATH
   split: test
   question_field: problem
   answer_field: solution
