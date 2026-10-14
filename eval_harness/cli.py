@@ -20,7 +20,7 @@ def main():
     eval_group.add_argument("--eval_config", type=str, default=None,
                             help="Path to YAML eval config, or 'default' for built-in benchmarks")
     eval_group.add_argument("--dataset", type=str, default=None, help="HuggingFace dataset name")
-    eval_group.add_argument("--config", type=str, default=None, help="HuggingFace dataset config name")
+    eval_group.add_argument("--config", type=list, default=None, help="HuggingFace dataset config name")
     eval_group.add_argument("--split", type=str, default="test", help="Dataset split")
     eval_group.add_argument("--question_field", type=str, default=None, help="Field name for question/prompt")
     eval_group.add_argument("--answer_field", type=str, default=None, help="Field name for ground truth")
