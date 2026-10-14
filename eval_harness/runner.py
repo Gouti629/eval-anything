@@ -182,7 +182,7 @@ def evaluate(
                             max_new_tokens=max_new_tokens,
                             temperature=sample_temp,
                             batch_size=len(prompts),
-                            timeout=30,
+                            timeout=2400,
                             num_return_sequences=num_samples,
                         )
                     except TimeoutError:
