@@ -9,7 +9,7 @@
   delimiter: "####"
 
 - name: math
-  dataset: lighteval/MATH
+  dataset: EleutherAI/hendrycks_math
   split: test
   question_field: problem
   answer_field: solution
