@@ -38,6 +38,16 @@ class TestStripThink:
         result = _strip_think(text)
         assert "3" in result
 
+    def test_empty_after_closed_think(self):
+        text = "<think>all reasoning no answer</think>"
+        result = _strip_think(text)
+        assert result == ""
+
+    def test_content_before_unclosed_think(self):
+        text = "The answer is 42<think>let me reconsider..."
+        result = _strip_think(text)
+        assert "42" in result
+
 
 # === number_extract ===
 
@@ -145,10 +155,11 @@ class TestLetterMatch:
         assert info["parsed"] == "D"
 
     def test_reasoning_mentions_multiple_letters_ambiguous(self):
-        """Multiple standalone letters without a clear final answer."""
+        """Multiple standalone letters without a clear final answer -> ambiguous."""
         output = "Option A is about cats. Option B is about dogs. Both are valid."
         score, info = letter_match(output, "A")
-        assert info["status"] in ("ambiguous", "parsed")
+        assert info["status"] == "ambiguous"
+        assert score == 0.0
 
     def test_no_letter_at_all(self):
         score, info = letter_match("I'm not sure about this question.", "A")
@@ -253,6 +264,92 @@ class TestExactMatch:
     def test_mismatch(self):
         score, _ = exact_match("hello", "world")
         assert score == 0.0
+
+
+# === End-to-end scorer agreement ===
+
+class TestScorerAgreement:
+    """Verify that score, parsed value, and status are consistent."""
+
+    def test_number_extract_parsed_matches_scored_value(self):
+        score, info = number_extract("The answer is 42.", "42")
+        assert score == 1.0
+        assert info["parsed"] == "42"
+        assert info["status"] == "parsed"
+
+    def test_number_extract_wrong_parsed_matches_scored_value(self):
+        score, info = number_extract("The answer is 43.", "42")
+        assert score == 0.0
+        assert info["parsed"] == "43"
+        assert info["status"] == "parsed"
+
+    def test_boxed_latex_parsed_matches_scored_value(self):
+        score, info = boxed_latex("Therefore \\boxed{7}", "\\boxed{7}")
+        assert score == 1.0
+        assert info["parsed"] == "7"
+        assert info["status"] == "parsed"
+
+    def test_letter_match_parsed_matches_scored_value(self):
+        score, info = letter_match("The answer is C", "C")
+        assert score == 1.0
+        assert info["parsed"] == "C"
+
+    def test_letter_match_wrong_parsed_matches_scored_value(self):
+        score, info = letter_match("The answer is A", "C")
+        assert score == 0.0
+        assert info["parsed"] == "A"
+
+    def test_missing_status_means_zero_score(self):
+        score, info = number_extract("no numbers here", "42")
+        assert score == 0.0
+        assert info["status"] == "missing"
+
+    def test_ambiguous_means_zero_score(self):
+        score, info = letter_match("A or B, hard to say", "A")
+        assert score == 0.0
+        assert info["status"] == "ambiguous"
+
+
+class TestNumberExtractEdgeCases:
+    def test_percentage(self):
+        score, _ = number_extract("The rate is 50%", "50")
+        assert score == 1.0
+
+    def test_trailing_period(self):
+        score, _ = number_extract("The answer is 42.", "42")
+        assert score == 1.0
+
+    def test_distractor_numbers_in_reasoning(self):
+        """Last number in text is used when no delimiter."""
+        output = "First I computed 10, then 20, final answer is 30"
+        score, info = number_extract(output, "30")
+        assert score == 1.0
+
+    def test_delimiter_ignores_reasoning_numbers(self):
+        output = "I see 10 and 20 in the problem #### 30"
+        score, _ = number_extract(output, "30", delimiter="####")
+        assert score == 1.0
+
+
+class TestLetterMatchEdgeCases:
+    def test_parenthesized_answer(self):
+        score, info = letter_match("The answer is (B)", "B")
+        assert score == 1.0
+        assert info["parsed"] == "B"
+
+    def test_my_answer_is_pattern(self):
+        score, info = letter_match("After analysis, my answer is D", "D")
+        assert score == 1.0
+        assert info["parsed"] == "D"
+
+    def test_only_letter_d_at_end(self):
+        score, info = letter_match("Blah blah\nD", "D")
+        assert score == 1.0
+
+    def test_empty_input(self):
+        score, info = letter_match("", "A")
+        assert score == 0.0
+        assert info["status"] == "missing"
 
 
 # === _normalize_number ===

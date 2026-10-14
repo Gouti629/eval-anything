@@ -73,6 +73,11 @@ class TestRunFingerprint:
         fp2 = _run_fingerprint(["m1"], [{"dataset": "d"}], {"bs": 16})
         assert fp1 != fp2
 
+    def test_think_mode_changes_fingerprint(self):
+        fp1 = _run_fingerprint(["m1"], [{"dataset": "d"}], {"bs": 8}, think=False)
+        fp2 = _run_fingerprint(["m1"], [{"dataset": "d"}], {"bs": 8}, think=True)
+        assert fp1 != fp2
+
 
 class TestFindMatchingPartial:
     def test_finds_matching(self):
@@ -96,6 +101,77 @@ class TestFindMatchingPartial:
     def test_missing_directory(self):
         result = _find_matching_partial("/nonexistent/path", "abc")
         assert result is None
+
+
+class TestResumeByExampleId:
+    """Resume must use example_id (content hash), not row index."""
+
+    def test_reordered_rows_still_matched(self):
+        """If dataset rows are reordered, done examples should be found by example_id."""
+        from eval_harness.runner import _is_example_done
+        state = {
+            "examples": {
+                "model1": {
+                    "eval1": [
+                        {"example_id": "eval1_0_abc123", "idx": 0, "score": 1.0},
+                        {"example_id": "eval1_1_def456", "idx": 1, "score": 0.0},
+                    ]
+                }
+            }
+        }
+        assert _is_example_done(state, "model1", "eval1", "eval1_0_abc123")
+        assert _is_example_done(state, "model1", "eval1", "eval1_1_def456")
+        assert not _is_example_done(state, "model1", "eval1", "eval1_2_ghi789")
+
+    def test_changed_content_not_matched(self):
+        """If question or answer changes, different content hash -> not matched."""
+        from eval_harness.evals.generic import GenericEval
+        cfg = {"name": "t", "dataset": "d", "question_field": "q", "answer_field": "a"}
+        ev = GenericEval(cfg)
+        e1 = ev._normalize_row({"q": "What is 2+2?", "a": "4"}, 0)
+        e2 = ev._normalize_row({"q": "What is 3+3?", "a": "6"}, 0)
+        assert e1["example_id"] != e2["example_id"]
+
+    def test_same_content_same_id_regardless_of_index(self):
+        from eval_harness.evals.generic import GenericEval
+        cfg = {"name": "t", "dataset": "d", "question_field": "q", "answer_field": "a"}
+        ev = GenericEval(cfg)
+        e1 = ev._normalize_row({"q": "hello", "a": "world"}, 0)
+        e2 = ev._normalize_row({"q": "hello", "a": "world"}, 5)
+        hash1 = e1["example_id"].split("_", 2)[2]
+        hash2 = e2["example_id"].split("_", 2)[2]
+        assert hash1 == hash2
+
+
+class TestTimeoutSafety:
+    """Generation timeout must not allow overlapping model.generate() calls."""
+
+    def test_wait_for_pending_clears_finished_thread(self):
+        from eval_harness.utils.generation import _wait_for_pending, _pending_lock, _pending_thread
+        import eval_harness.utils.generation as gen_mod
+        import threading
+
+        finished = threading.Thread(target=lambda: None)
+        finished.start()
+        finished.join()
+        with gen_mod._pending_lock:
+            gen_mod._pending_thread = finished
+        gen_mod._wait_for_pending()
+        assert gen_mod._pending_thread is None
+
+    def test_wait_for_pending_blocks_on_alive_thread(self):
+        import eval_harness.utils.generation as gen_mod
+        import threading
+
+        event = threading.Event()
+        slow_thread = threading.Thread(target=lambda: event.wait(timeout=5))
+        slow_thread.start()
+        with gen_mod._pending_lock:
+            gen_mod._pending_thread = slow_thread
+        event.set()
+        gen_mod._wait_for_pending()
+        assert not slow_thread.is_alive()
+        assert gen_mod._pending_thread is None
 
 
 class TestSerializeGt:

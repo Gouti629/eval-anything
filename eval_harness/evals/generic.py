@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
+import operator
 import re
 
 from datasets import load_dataset
@@ -16,6 +18,74 @@ _VALID_FORMATTERS = {"plain", "multiple_choice", "code_completion"}
 
 class ConfigError(ValueError):
     pass
+
+
+_COMPARE_OPS = {
+    ast.Eq: operator.eq,
+    ast.NotEq: operator.ne,
+    ast.Lt: operator.lt,
+    ast.LtE: operator.le,
+    ast.Gt: operator.gt,
+    ast.GtE: operator.ge,
+}
+
+_BOOL_OPS = {
+    ast.And: all,
+    ast.Or: any,
+}
+
+
+def _safe_eval_filter(expr: str, row: dict) -> bool:
+    """Evaluate a simple filter expression safely without exec/eval.
+
+    Supports: field comparisons (field > 5, field == "x"), boolean
+    combinations (and, or), and 'in' / 'not in' membership tests.
+    """
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError as e:
+        raise ConfigError(f"Invalid filter expression: {expr!r}: {e}") from e
+    return _eval_node(tree.body, row)
+
+
+def _eval_node(node: ast.AST, row: dict):
+    if isinstance(node, ast.Compare):
+        left = _eval_node(node.left, row)
+        result = True
+        current = left
+        for op_node, comparator in zip(node.ops, node.comparators):
+            right = _eval_node(comparator, row)
+            if isinstance(op_node, ast.In):
+                result = result and (current in right)
+            elif isinstance(op_node, ast.NotIn):
+                result = result and (current not in right)
+            elif type(op_node) in _COMPARE_OPS:
+                result = result and _COMPARE_OPS[type(op_node)](current, right)
+            else:
+                raise ConfigError(f"Unsupported comparison: {type(op_node).__name__}")
+            current = right
+        return result
+    if isinstance(node, ast.BoolOp):
+        fn = _BOOL_OPS.get(type(node.op))
+        if fn is None:
+            raise ConfigError(f"Unsupported boolean op: {type(node.op).__name__}")
+        return fn(_eval_node(v, row) for v in node.values)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return not _eval_node(node.operand, row)
+    if isinstance(node, ast.Name):
+        if node.id not in row:
+            raise ConfigError(f"Filter references unknown field {node.id!r}. Available: {list(row.keys())}")
+        return row[node.id]
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.List):
+        return [_eval_node(el, row) for el in node.elts]
+    if isinstance(node, ast.Tuple):
+        return tuple(_eval_node(el, row) for el in node.elts)
+    raise ConfigError(
+        f"Unsupported expression node {type(node).__name__} in filter. "
+        f"Only field comparisons, and/or/not, and literals are allowed."
+    )
 
 
 def validate_config(config: dict) -> list[str]:
@@ -40,6 +110,9 @@ def config_fingerprint(config: dict, gen_params: dict) -> str:
         "config": config.get("config"),
         "split": config.get("split", "test"),
         "filter": config.get("filter"),
+        "question_field": config.get("question_field"),
+        "answer_field": config.get("answer_field"),
+        "choices_field": config.get("choices_field"),
         "scorer": config.get("scorer", "exact_match"),
         "formatter": config.get("formatter", "plain"),
         "delimiter": config.get("delimiter"),
@@ -104,7 +177,8 @@ class GenericEval:
             combined = concatenate_datasets(datasets)
 
         if self.filter_expr:
-            combined = combined.filter(lambda row: eval(self.filter_expr, {}, row))
+            expr = self.filter_expr
+            combined = combined.filter(lambda row: _safe_eval_filter(expr, row))
 
         results = []
         for i, row in enumerate(combined):

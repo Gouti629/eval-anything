@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "eval-harness"
 version = "0.1.0"
 description = "Lightweight LLM evaluation harness"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 dependencies = [
     "torch>=2.0",
     "transformers>=4.40",
@@ -17,8 +17,14 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
 [project.scripts]
 eval-harness = "eval_harness.cli:main"
 
 [tool.setuptools.package-data]
 eval_harness = ["*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

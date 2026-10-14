@@ -1,7 +1,7 @@
-"""Tests for GenericEval — config validation, ARC normalization, scoring dispatch."""
+"""Tests for GenericEval — config validation, ARC normalization, scoring dispatch, safe filter."""
 import pytest
 
-from eval_harness.evals.generic import GenericEval, validate_config, config_fingerprint, ConfigError
+from eval_harness.evals.generic import GenericEval, validate_config, config_fingerprint, ConfigError, _safe_eval_filter
 
 
 class TestValidateConfig:
@@ -78,6 +78,30 @@ class TestConfigFingerprint:
     def test_different_gen_params(self):
         cfg = {"dataset": "ds"}
         assert config_fingerprint(cfg, {"batch_size": 8}) != config_fingerprint(cfg, {"batch_size": 16})
+
+    def test_different_question_field_different_fingerprint(self):
+        gen = {"batch_size": 8}
+        cfg1 = {"dataset": "ds", "question_field": "q1"}
+        cfg2 = {"dataset": "ds", "question_field": "q2"}
+        assert config_fingerprint(cfg1, gen) != config_fingerprint(cfg2, gen)
+
+    def test_different_answer_field_different_fingerprint(self):
+        gen = {"batch_size": 8}
+        cfg1 = {"dataset": "ds", "answer_field": "a1"}
+        cfg2 = {"dataset": "ds", "answer_field": "a2"}
+        assert config_fingerprint(cfg1, gen) != config_fingerprint(cfg2, gen)
+
+    def test_different_choices_field_different_fingerprint(self):
+        gen = {"batch_size": 8}
+        cfg1 = {"dataset": "ds", "choices_field": "c1"}
+        cfg2 = {"dataset": "ds", "choices_field": "c2"}
+        assert config_fingerprint(cfg1, gen) != config_fingerprint(cfg2, gen)
+
+    def test_different_filter_different_fingerprint(self):
+        gen = {"batch_size": 8}
+        cfg1 = {"dataset": "ds", "filter": "x > 5"}
+        cfg2 = {"dataset": "ds", "filter": "x > 10"}
+        assert config_fingerprint(cfg1, gen) != config_fingerprint(cfg2, gen)
 
 
 class TestScoreDispatch:
@@ -172,6 +196,48 @@ class TestArcNormalization:
         with pytest.raises(ConfigError, match="field extraction failed"):
             ev._normalize_row({"a": "x"}, 0)
 
+class TestSafeFilter:
+    def test_simple_comparison(self):
+        assert _safe_eval_filter("x > 5", {"x": 10}) is True
+        assert _safe_eval_filter("x > 5", {"x": 3}) is False
+
+    def test_chained_comparison(self):
+        assert _safe_eval_filter("x >= 11 and x <= 510", {"x": 100, "task_id": 100}) is True
+        assert _safe_eval_filter("x >= 11 and x <= 510", {"x": 5, "task_id": 5}) is False
+
+    def test_mbpp_filter(self):
+        assert _safe_eval_filter("task_id >= 11 and task_id <= 510", {"task_id": 100}) is True
+        assert _safe_eval_filter("task_id >= 11 and task_id <= 510", {"task_id": 5}) is False
+
+    def test_equality(self):
+        assert _safe_eval_filter("name == 'test'", {"name": "test"}) is True
+        assert _safe_eval_filter("name == 'test'", {"name": "other"}) is False
+
+    def test_in_operator(self):
+        assert _safe_eval_filter("x in [1, 2, 3]", {"x": 2}) is True
+        assert _safe_eval_filter("x in [1, 2, 3]", {"x": 5}) is False
+
+    def test_not_operator(self):
+        assert _safe_eval_filter("not x > 5", {"x": 3}) is True
+
+    def test_rejects_function_calls(self):
+        with pytest.raises(ConfigError, match="Unsupported"):
+            _safe_eval_filter("__import__('os').system('echo pwned')", {})
+
+    def test_rejects_attribute_access(self):
+        with pytest.raises(ConfigError, match="Unsupported"):
+            _safe_eval_filter("x.__class__", {"x": 1})
+
+    def test_unknown_field_raises(self):
+        with pytest.raises(ConfigError, match="unknown field"):
+            _safe_eval_filter("nonexistent > 5", {"x": 1})
+
+    def test_syntax_error_raises(self):
+        with pytest.raises(ConfigError, match="Invalid filter"):
+            _safe_eval_filter("x >>> 5", {"x": 1})
+
+
+class TestExampleId:
     def test_example_id_has_content_hash(self):
         cfg = {
             "name": "t",

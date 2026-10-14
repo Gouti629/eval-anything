@@ -43,11 +43,12 @@ def _final_path(output_dir: str, timestamp: str) -> str:
     return os.path.join(output_dir, f"{timestamp}.json")
 
 
-def _run_fingerprint(models: list[str], eval_configs: list[dict], gen_params: dict) -> str:
+def _run_fingerprint(models: list[str], eval_configs: list[dict], gen_params: dict, think: bool = False) -> str:
     parts = {
         "models": sorted(models),
         "evals": [config_fingerprint(c, gen_params) for c in eval_configs],
         "gen": gen_params,
+        "think": think,
     }
     return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -75,7 +76,7 @@ def _is_example_done(state: dict, model_key: str, eval_name: str, example_id: st
 def _build_manifest(models, eval_configs, gen_params, device, think):
     return {
         "models": models,
-        "eval_configs": [{k: v for k, v in c.items() if k != "filter"} for c in eval_configs],
+        "eval_configs": eval_configs,
         "generation": gen_params,
         "device": device,
         "think": think,
@@ -148,7 +149,7 @@ def evaluate(
         "pass_k": pass_k,
     }
 
-    fingerprint = _run_fingerprint(models, eval_configs, gen_params)
+    fingerprint = _run_fingerprint(models, eval_configs, gen_params, think=think)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     existing = _find_matching_partial(output_dir, fingerprint)
@@ -211,7 +212,11 @@ def evaluate(
 
                 total_score = 0.0
                 correct = 0
-                failed = 0
+                incorrect = 0
+                parse_failed = 0
+                timed_out = 0
+                oom_count = 0
+                errored = 0
                 n_done = 0
                 total_gen_tokens = 0
                 total_gen_time = 0.0
@@ -219,25 +224,29 @@ def evaluate(
 
                 for existing_ex in state["examples"][model_key][eval_name]:
                     n_done += 1
-                    if existing_ex["status"] not in ("ok", "incorrect"):
-                        failed += 1
-                    else:
+                    st = existing_ex.get("status", "unknown")
+                    if st == "ok":
                         total_score += existing_ex["score"]
-                        if existing_ex["score"] >= 1.0:
-                            correct += 1
+                        correct += 1
+                    elif st == "incorrect":
+                        incorrect += 1
+                    elif st == "timeout":
+                        timed_out += 1
+                    elif st == "oom":
+                        oom_count += 1
+                    elif st == "error":
+                        errored += 1
+                    else:
+                        errored += 1
 
                 done_ids = {
                     ex["example_id"]
                     for ex in state["examples"][model_key][eval_name]
                     if "example_id" in ex
                 }
-                done_indices = {
-                    ex["idx"]
-                    for ex in state["examples"][model_key][eval_name]
-                }
                 remaining = [
                     (i, ex) for i, ex in enumerate(data)
-                    if ex["example_id"] not in done_ids and i not in done_indices
+                    if ex["example_id"] not in done_ids
                 ]
 
                 start_time = time.time()
@@ -277,7 +286,7 @@ def evaluate(
                                 "score": 0.0,
                                 "status": "timeout",
                             })
-                            failed += 1
+                            timed_out += 1
                             pbar.update(1)
                         _save_state_atomic(partial_file, state)
                         batch_idx += current_batch_size
@@ -302,12 +311,14 @@ def evaluate(
                                 "score": 0.0,
                                 "status": "oom",
                             })
-                            failed += 1
+                            oom_count += 1
                             pbar.update(1)
                         _save_state_atomic(partial_file, state)
                         batch_idx += current_batch_size
                         continue
 
+                    # Approximate token count via re-tokenization of decoded text.
+                    # True generated token IDs are not available after batch_decode.
                     for out_seqs in outputs:
                         for seq in out_seqs:
                             total_gen_tokens += len(tokenizer.encode(seq, add_special_tokens=False))
@@ -355,7 +366,7 @@ def evaluate(
                             status = "error"
                             sample_results = None
                             sample_outputs = [None]
-                            tb = traceback.format_exception_only(type(exc), exc)
+                            error_tb = "".join(traceback.format_exception_only(type(exc), exc))[:500]
 
                         record = {
                             "idx": idx,
@@ -371,16 +382,21 @@ def evaluate(
                         if sample_results is not None:
                             record["samples"] = sample_results
                         if status == "error":
-                            record["error"] = "".join(tb)[:500] if "tb" in dir() else "unknown"
+                            record["error"] = error_tb
 
                         state["examples"][model_key][eval_name].append(record)
 
-                        if status in ("ok", "incorrect"):
+                        if status == "ok":
                             total_score += example_score
-                            if example_score >= 1.0:
-                                correct += 1
+                            correct += 1
+                        elif status == "incorrect":
+                            incorrect += 1
+                        elif status == "timeout":
+                            timed_out += 1
+                        elif status == "oom":
+                            oom_count += 1
                         else:
-                            failed += 1
+                            errored += 1
 
                         pbar.update(1)
 
@@ -392,6 +408,8 @@ def evaluate(
 
                 elapsed = time.time() - start_time
                 n_total = len(data)
+                scored_count = correct + incorrect
+                infra_failures = timed_out + oom_count + errored
                 avg_score = total_score / n_total if n_total > 0 else 0.0
 
                 metric = eval_obj.metric_name
@@ -402,7 +420,12 @@ def evaluate(
                     "score": round(avg_score, 4),
                     "n": n_total,
                     "correct": correct,
-                    "failed": failed,
+                    "incorrect": incorrect,
+                    "timed_out": timed_out,
+                    "oom": oom_count,
+                    "errored": errored,
+                    "scored": scored_count,
+                    "infra_failures": infra_failures,
                     "metric": metric,
                     "_complete": True,
                 }
@@ -417,9 +440,11 @@ def evaluate(
                     "examples_per_second": round(n_total / elapsed, 2) if elapsed > 0 else 0,
                 }
 
-                print(f"    {eval_name}: {avg_score:.1%} ({correct}/{n_total}) "
-                      f"[{elapsed:.1f}s, {gen_tok_per_sec:.0f} tok/s gen, "
-                      f"{total_score_time:.1f}s scoring]")
+                infra_msg = ""
+                if infra_failures > 0:
+                    infra_msg = f" [{infra_failures} infra failures: {timed_out} timeout, {oom_count} oom, {errored} error]"
+                print(f"    {eval_name}: {avg_score:.1%} ({correct}/{n_total}){infra_msg} "
+                      f"[{elapsed:.1f}s, {gen_tok_per_sec:.0f} tok/s gen]")
 
                 _save_state_atomic(partial_file, state)
 

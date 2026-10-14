@@ -5,7 +5,28 @@ import threading
 import torch
 
 
+_pending_thread: threading.Thread | None = None
+_pending_lock = threading.Lock()
+
+
+def _wait_for_pending():
+    """Block until any previously timed-out generation thread finishes.
+
+    A Python thread running model.generate() cannot be killed. If a prior
+    call timed out, the thread is still using the model/GPU. Starting another
+    generation on the same model would produce undefined behavior. This
+    function waits for that thread to finish before proceeding.
+    """
+    global _pending_thread
+    with _pending_lock:
+        if _pending_thread is not None and _pending_thread.is_alive():
+            _pending_thread.join()
+        _pending_thread = None
+
+
 def _generate_with_timeout(model, input_ids, attention_mask, gen_kwargs, timeout: int):
+    _wait_for_pending()
+
     result = [None]
     error = [None]
 
@@ -25,14 +46,13 @@ def _generate_with_timeout(model, input_ids, attention_mask, gen_kwargs, timeout
     thread.join(timeout=timeout)
 
     if thread.is_alive():
-        # Thread cannot be killed in Python; mark as timed out.
-        # The daemon thread will be cleaned up on process exit.
-        # The GPU memory from this generation will persist until the
-        # next cuda.empty_cache() or model deletion.
+        global _pending_thread
+        with _pending_lock:
+            _pending_thread = thread
         raise TimeoutError(
             f"Generation timed out after {timeout}s. "
-            f"The background thread may still be running — "
-            f"consider reducing max_new_tokens or batch_size."
+            f"The background thread is still running and will be awaited "
+            f"before the next generation call."
         )
     if error[0] is not None:
         raise error[0]
