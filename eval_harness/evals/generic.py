@@ -1,10 +1,61 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+
 from datasets import load_dataset
 
-from eval_harness.rewards.scorers import SCORERS
+from eval_harness.rewards.scorers import SCORERS, _strip_think
+
+
+_REQUIRED_FIELDS = {"name", "dataset", "question_field", "answer_field"}
+_VALID_SCORERS = set(SCORERS.keys())
+_VALID_FORMATTERS = {"plain", "multiple_choice", "code_completion"}
+
+
+class ConfigError(ValueError):
+    pass
+
+
+def validate_config(config: dict) -> list[str]:
+    errors = []
+    missing = _REQUIRED_FIELDS - set(config.keys())
+    if missing:
+        errors.append(f"Missing required fields: {missing}")
+    scorer = config.get("scorer", "exact_match")
+    if scorer not in _VALID_SCORERS:
+        errors.append(f"Unknown scorer {scorer!r}. Valid: {sorted(_VALID_SCORERS)}")
+    formatter = config.get("formatter", "plain")
+    if formatter not in _VALID_FORMATTERS:
+        errors.append(f"Unknown formatter {formatter!r}. Valid: {sorted(_VALID_FORMATTERS)}")
+    if config.get("formatter") == "multiple_choice" and not config.get("choices_field"):
+        errors.append("multiple_choice formatter requires choices_field")
+    return errors
+
+
+def config_fingerprint(config: dict, gen_params: dict) -> str:
+    canonical = json.dumps({
+        "dataset": config.get("dataset"),
+        "config": config.get("config"),
+        "split": config.get("split", "test"),
+        "filter": config.get("filter"),
+        "scorer": config.get("scorer", "exact_match"),
+        "formatter": config.get("formatter", "plain"),
+        "delimiter": config.get("delimiter"),
+        "prepend_prompt": config.get("prepend_prompt", False),
+        "system_prompt": config.get("system_prompt", ""),
+        **gen_params,
+    }, sort_keys=True)
+    return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
 class GenericEval:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, think: bool = False):
+        errors = validate_config(config)
+        if errors:
+            raise ConfigError(f"Invalid eval config {config.get('name', '?')}: {'; '.join(errors)}")
+
         self.name = config["name"]
         self.dataset_name = config["dataset"]
         self.dataset_config = config.get("config", None)
@@ -18,6 +69,7 @@ class GenericEval:
         self.delimiter = config.get("delimiter", None)
         self.choices_field = config.get("choices_field", None)
         self.prepend_prompt = config.get("prepend_prompt", False)
+        self.think = think
         self._scorer_fn = SCORERS[self.scorer_name]
 
     @property
@@ -55,81 +107,117 @@ class GenericEval:
             combined = combined.filter(lambda row: eval(self.filter_expr, {}, row))
 
         results = []
-        for row in combined:
-            question = self._get_field(row, self.question_field)
-            answer = self._get_field(row, self.answer_field)
-            entry = {
-                "question": question,
-                "ground_truth": answer,
-                "_raw": {k: v for k, v in row.items()},
-            }
+        for i, row in enumerate(combined):
+            raw = dict(row)
+            entry = self._normalize_row(raw, i)
             results.append(entry)
         return results
+
+    def _normalize_row(self, raw: dict, idx: int) -> dict:
+        try:
+            question = self._get_field(raw, self.question_field)
+            answer = self._get_field(raw, self.answer_field)
+        except (KeyError, TypeError) as e:
+            raise ConfigError(
+                f"Dataset {self.dataset_name} row {idx}: field extraction failed: {e}. "
+                f"Available fields: {list(raw.keys())}"
+            ) from e
+
+        if self.formatter_name == "multiple_choice" and self.choices_field:
+            choices_raw = self._get_field(raw, self.choices_field)
+            if isinstance(choices_raw, dict) and "label" in choices_raw and "text" in choices_raw:
+                choices = list(zip(choices_raw["label"], choices_raw["text"]))
+            elif isinstance(choices_raw, list):
+                labels = "ABCDEFGHIJKLMNOP"
+                choices = [(labels[i], c) for i, c in enumerate(choices_raw)]
+            else:
+                choices = []
+            raw["_choices_normalized"] = choices
+
+        content_hash = hashlib.md5(
+            f"{question}||{answer}".encode(errors="replace")
+        ).hexdigest()[:12]
+
+        return {
+            "question": question,
+            "ground_truth": answer,
+            "example_id": f"{self.name}_{idx}_{content_hash}",
+            "_raw": raw,
+        }
 
     def _get_field(self, row: dict, field: str):
         if "." in field:
             parts = field.split(".")
             val = row
             for p in parts:
-                val = val[p]
+                if isinstance(val, dict):
+                    val = val[p]
+                else:
+                    raise KeyError(f"Cannot traverse into {type(val).__name__} with key {p!r}")
             return val
         return row[field]
 
     def format_prompt(self, example: dict, tokenizer) -> str:
-        question = example["question"]
+        question = str(example["question"])
 
-        if self.formatter_name == "multiple_choice" and self.choices_field:
-            choices = example["_raw"][self.choices_field]
-            question = question + "\n\n" + self._format_choices(choices)
-        elif self.formatter_name == "code_completion":
-            pass
+        if self.formatter_name == "multiple_choice":
+            choices = example["_raw"].get("_choices_normalized", [])
+            if choices:
+                choice_text = "\n".join(f"{label}. {text}" for label, text in choices)
+                question = question + "\n\n" + choice_text
 
         messages = []
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
         messages.append({"role": "user", "content": question})
 
-        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        prompt = prompt.replace("<|im_start|>assistant\n<think>\n", "<|im_start|>assistant\n")
+        try:
+            prompt = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+        except Exception:
+            prompt = ""
+            for msg in messages:
+                prompt += f"{msg['role']}: {msg['content']}\n"
+            prompt += "assistant: "
+
+        if not self.think:
+            prompt = prompt.replace(
+                "<|im_start|>assistant\n<think>\n",
+                "<|im_start|>assistant\n",
+            )
         return prompt
 
-    def _format_choices(self, choices) -> str:
-        if isinstance(choices, dict) and "label" in choices and "text" in choices:
-            return "\n".join(
-                f"{label}. {text}"
-                for label, text in zip(choices["label"], choices["text"])
-            )
-        if isinstance(choices, list):
-            labels = "ABCDEFGHIJKLMNOP"
-            return "\n".join(
-                f"{labels[i]}. {c}" for i, c in enumerate(choices)
-            )
-        return str(choices)
-
-    def score(self, generated: str, ground_truth, example: dict | None = None) -> float:
+    def score(self, generated: str, ground_truth, example: dict | None = None) -> tuple[float, dict]:
         kwargs = {}
         if self.delimiter:
             kwargs["delimiter"] = self.delimiter
         if self.prepend_prompt and example is not None:
-            kwargs["prepend"] = example["question"]
-        return self._scorer_fn(generated, ground_truth if isinstance(ground_truth, str) else str(ground_truth), **kwargs)
+            kwargs["prepend"] = str(example["question"])
+
+        if self.scorer_name == "code_exec":
+            return self._scorer_fn(generated, ground_truth, **kwargs)
+
+        gt = ground_truth if isinstance(ground_truth, str) else str(ground_truth)
+        return self._scorer_fn(generated, gt, **kwargs)
 
     def extract_answer(self, generated: str) -> str | None:
-        from eval_harness.rewards.scorers import _strip_think
         clean = _strip_think(generated)
         if self.scorer_name == "number_extract":
             if self.delimiter and self.delimiter in clean:
-                return clean.split(self.delimiter)[-1].strip()
-            import re
-            numbers = re.findall(r"-?\d+\.?\d*", clean)
+                after = clean.split(self.delimiter)[-1].strip()
+                from eval_harness.rewards.scorers import _NUMBER_RE
+                nums = _NUMBER_RE.findall(after)
+                return nums[0] if nums else after[:50] or None
+            from eval_harness.rewards.scorers import _NUMBER_RE
+            numbers = _NUMBER_RE.findall(clean)
             return numbers[-1] if numbers else None
         if self.scorer_name == "boxed_latex":
             from eval_harness.rewards.scorers import _extract_boxed
             return _extract_boxed(clean)
         if self.scorer_name == "letter_match":
-            import re
-            match = re.search(r"[A-D]", clean.upper())
-            return match.group(0) if match else None
+            _, info = self._scorer_fn(generated, "X")
+            return info.get("parsed")
         if self.scorer_name == "code_exec":
             from eval_harness.rewards.scorers import _extract_code
             return _extract_code(clean)

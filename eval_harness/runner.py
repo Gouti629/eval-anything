@@ -1,14 +1,19 @@
+from __future__ import annotations
+
+import hashlib
 import json
 import math
 import os
+import platform
+import sys
 import time
+import traceback
 from datetime import datetime
-from pathlib import Path
 
 import torch
 from tqdm import tqdm
 
-from eval_harness.evals.generic import GenericEval
+from eval_harness.evals.generic import GenericEval, config_fingerprint, validate_config
 from eval_harness.models import load_model
 from eval_harness.plotting.compare import plot_comparison, sanitize_model_name
 from eval_harness.utils.generation import batched_generate
@@ -20,36 +25,65 @@ def pass_at_k(n: int, c: int, k: int) -> float:
     return 1.0 - math.comb(n - c, k) / math.comb(n, k)
 
 
-def _partial_path(output_dir: str, timestamp: str) -> str:
-    return os.path.join(output_dir, f"{timestamp}.partial.json")
+def _save_state_atomic(path: str, state: dict):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f, indent=2)
+    if platform.system() == "Windows":
+        if os.path.exists(path):
+            os.remove(path)
+    os.rename(tmp, path)
+
+
+def _partial_path(output_dir: str, fingerprint: str) -> str:
+    return os.path.join(output_dir, f"{fingerprint}.partial.json")
 
 
 def _final_path(output_dir: str, timestamp: str) -> str:
     return os.path.join(output_dir, f"{timestamp}.json")
 
 
-def _save_state(path: str, state: dict):
-    with open(path, "w") as f:
-        json.dump(state, f, indent=2)
+def _run_fingerprint(models: list[str], eval_configs: list[dict], gen_params: dict) -> str:
+    parts = {
+        "models": sorted(models),
+        "evals": [config_fingerprint(c, gen_params) for c in eval_configs],
+        "gen": gen_params,
+    }
+    return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def _find_existing_partial(output_dir: str) -> tuple[str, dict] | None:
-    if not os.path.exists(output_dir):
-        return None
-    for fname in sorted(os.listdir(output_dir), reverse=True):
-        if fname.endswith(".partial.json"):
-            ts = fname.replace(".partial.json", "")
-            path = os.path.join(output_dir, fname)
+def _find_matching_partial(output_dir: str, fingerprint: str) -> dict | None:
+    path = _partial_path(output_dir, fingerprint)
+    if os.path.exists(path):
+        try:
             with open(path) as f:
-                return ts, json.load(f)
+                state = json.load(f)
+            if state.get("fingerprint") == fingerprint:
+                return state
+        except (json.JSONDecodeError, KeyError):
+            pass
     return None
 
 
-def _is_example_done(state: dict, model_key: str, eval_name: str, idx: int) -> bool:
+def _is_example_done(state: dict, model_key: str, eval_name: str, example_id: str) -> bool:
     examples = state.get("examples", {})
     model_examples = examples.get(model_key, {})
     eval_examples = model_examples.get(eval_name, [])
-    return any(ex.get("idx") == idx for ex in eval_examples)
+    return any(ex.get("example_id") == example_id for ex in eval_examples)
+
+
+def _build_manifest(models, eval_configs, gen_params, device, think):
+    return {
+        "models": models,
+        "eval_configs": [{k: v for k, v in c.items() if k != "filter"} for c in eval_configs],
+        "generation": gen_params,
+        "device": device,
+        "think": think,
+        "precision": "bfloat16",
+        "python_version": sys.version,
+        "torch_version": torch.__version__,
+        "platform": platform.platform(),
+    }
 
 
 def _print_summary(results: dict):
@@ -57,7 +91,10 @@ def _print_summary(results: dict):
         return
 
     model_names = list(results.keys())
-    eval_names = list(results[model_names[0]].keys())
+    all_evals = set()
+    for m in model_names:
+        all_evals.update(results[m].keys())
+    eval_names = sorted(all_evals)
 
     col_width = max(len(sanitize_model_name(m)) for m in model_names) + 2
     header = f"{'Model':<{col_width}}"
@@ -69,8 +106,11 @@ def _print_summary(results: dict):
     for model in model_names:
         row = f"{sanitize_model_name(model):<{col_width}}"
         for e in eval_names:
-            score = results[model][e]["score"]
-            row += f" | {score:>7.1%}"
+            if e in results[model]:
+                score = results[model][e]["score"]
+                row += f" | {score:>7.1%}"
+            else:
+                row += f" | {'N/A':>7}"
         print(row)
     print()
 
@@ -85,35 +125,57 @@ def evaluate(
     temperature: float = 0.0,
     pass_k: int | None = None,
     device: str = "cuda",
+    think: bool = False,
 ) -> str:
+    for cfg in eval_configs:
+        errors = validate_config(cfg)
+        if errors:
+            raise ValueError(f"Invalid eval config {cfg.get('name', '?')}: {'; '.join(errors)}")
+
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be >= 1, got {batch_size}")
+    if max_new_tokens < 1:
+        raise ValueError(f"max_new_tokens must be >= 1, got {max_new_tokens}")
+    if pass_k is not None and pass_k < 1:
+        raise ValueError(f"pass_k must be >= 1, got {pass_k}")
+
     os.makedirs(output_dir, exist_ok=True)
 
+    gen_params = {
+        "batch_size": batch_size,
+        "max_new_tokens": max_new_tokens,
+        "temperature": temperature,
+        "pass_k": pass_k,
+    }
+
+    fingerprint = _run_fingerprint(models, eval_configs, gen_params)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    partial = _find_existing_partial(output_dir)
-    if partial is not None:
-        timestamp, state = partial
-        print(f"Resuming from partial run: {timestamp}")
+    existing = _find_matching_partial(output_dir, fingerprint)
+    if existing is not None:
+        state = existing
+        timestamp = state.get("timestamp", timestamp)
+        print(f"Resuming run (fingerprint {fingerprint})")
     else:
         state = {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "timestamp": timestamp,
+            "fingerprint": fingerprint,
             "comment": comment,
+            "manifest": _build_manifest(models, eval_configs, gen_params, device, think),
             "results": {},
-            "config": {
-                "batch_size": batch_size,
-                "max_new_tokens": max_new_tokens,
-                "temperature": temperature,
-                "pass_k": pass_k,
-            },
+            "config": gen_params,
             "examples": {},
+            "timing": {},
         }
 
-    partial_file = _partial_path(output_dir, timestamp)
+    partial_file = _partial_path(output_dir, fingerprint)
     final_file = _final_path(output_dir, timestamp)
 
     eval_objects = []
     for cfg in eval_configs:
-        eval_objects.append(GenericEval(cfg))
+        eval_objects.append(GenericEval(cfg, think=think))
+
+    current_batch_size = batch_size
 
     try:
         for model_path in models:
@@ -125,6 +187,8 @@ def evaluate(
                 state["results"][model_key] = {}
             if model_key not in state["examples"]:
                 state["examples"][model_key] = {}
+            if model_key not in state.get("timing", {}):
+                state.setdefault("timing", {})[model_key] = {}
 
             for eval_obj in eval_objects:
                 eval_name = eval_obj.name
@@ -149,31 +213,44 @@ def evaluate(
                 correct = 0
                 failed = 0
                 n_done = 0
+                total_gen_tokens = 0
+                total_gen_time = 0.0
+                total_score_time = 0.0
 
                 for existing_ex in state["examples"][model_key][eval_name]:
-                    idx = existing_ex["idx"]
-                    if idx < len(data):
-                        n_done += 1
-                        if existing_ex["status"] != "ok":
-                            failed += 1
-                        else:
-                            total_score += existing_ex["score"]
-                            if existing_ex["score"] >= 1.0:
-                                correct += 1
+                    n_done += 1
+                    if existing_ex["status"] not in ("ok", "incorrect"):
+                        failed += 1
+                    else:
+                        total_score += existing_ex["score"]
+                        if existing_ex["score"] >= 1.0:
+                            correct += 1
 
-                remaining_indices = [
-                    idx for idx in range(len(data))
-                    if not _is_example_done(state, model_key, eval_name, idx)
+                done_ids = {
+                    ex["example_id"]
+                    for ex in state["examples"][model_key][eval_name]
+                    if "example_id" in ex
+                }
+                done_indices = {
+                    ex["idx"]
+                    for ex in state["examples"][model_key][eval_name]
+                }
+                remaining = [
+                    (i, ex) for i, ex in enumerate(data)
+                    if ex["example_id"] not in done_ids and i not in done_indices
                 ]
 
                 start_time = time.time()
                 pbar = tqdm(total=len(data), initial=n_done, desc=f"    {eval_name}")
 
-                for batch_start in range(0, len(remaining_indices), batch_size):
-                    batch_indices = remaining_indices[batch_start : batch_start + batch_size]
-                    batch_examples = [data[i] for i in batch_indices]
+                batch_idx = 0
+                while batch_idx < len(remaining):
+                    batch_slice = remaining[batch_idx : batch_idx + current_batch_size]
+                    batch_indices = [item[0] for item in batch_slice]
+                    batch_examples = [item[1] for item in batch_slice]
                     prompts = [eval_obj.format_prompt(ex, tokenizer) for ex in batch_examples]
 
+                    gen_start = time.time()
                     try:
                         outputs = batched_generate(
                             model,
@@ -182,90 +259,134 @@ def evaluate(
                             max_new_tokens=max_new_tokens,
                             temperature=sample_temp,
                             batch_size=len(prompts),
-                            timeout=2400,
+                            timeout=120,
                             num_return_sequences=num_samples,
                         )
+                        gen_elapsed = time.time() - gen_start
+                        total_gen_time += gen_elapsed
                     except TimeoutError:
-                        for idx in batch_indices:
-                            ex = data[idx]
+                        for idx, ex in zip(batch_indices, batch_examples):
                             state["examples"][model_key][eval_name].append({
                                 "idx": idx,
+                                "example_id": ex["example_id"],
                                 "question": str(ex["question"])[:500],
-                                "ground_truth": str(ex["ground_truth"]),
+                                "ground_truth": _serialize_gt(ex["ground_truth"]),
                                 "model_output": None,
                                 "extracted": None,
+                                "parse_status": "timeout",
                                 "score": 0.0,
                                 "status": "timeout",
                             })
                             failed += 1
                             pbar.update(1)
-                        _save_state(partial_file, state)
+                        _save_state_atomic(partial_file, state)
+                        batch_idx += current_batch_size
                         continue
                     except torch.cuda.OutOfMemoryError:
                         torch.cuda.empty_cache()
-                        for idx in batch_indices:
-                            ex = data[idx]
+                        if current_batch_size > 1:
+                            new_bs = max(1, current_batch_size // 2)
+                            print(f"\n    OOM with batch_size={current_batch_size}, "
+                                  f"reducing to {new_bs}")
+                            current_batch_size = new_bs
+                            continue
+                        for idx, ex in zip(batch_indices, batch_examples):
                             state["examples"][model_key][eval_name].append({
                                 "idx": idx,
+                                "example_id": ex["example_id"],
                                 "question": str(ex["question"])[:500],
-                                "ground_truth": str(ex["ground_truth"]),
+                                "ground_truth": _serialize_gt(ex["ground_truth"]),
                                 "model_output": None,
                                 "extracted": None,
+                                "parse_status": "oom",
                                 "score": 0.0,
                                 "status": "oom",
                             })
                             failed += 1
                             pbar.update(1)
-                        _save_state(partial_file, state)
+                        _save_state_atomic(partial_file, state)
+                        batch_idx += current_batch_size
                         continue
 
-                    for j, idx in enumerate(batch_indices):
-                        ex = data[idx]
+                    for out_seqs in outputs:
+                        for seq in out_seqs:
+                            total_gen_tokens += len(tokenizer.encode(seq, add_special_tokens=False))
+
+                    score_start = time.time()
+                    for j, (idx, ex) in enumerate(zip(batch_indices, batch_examples)):
                         sample_outputs = outputs[j]
 
                         try:
                             if use_pass_k:
-                                sample_scores = []
+                                sample_results = []
                                 for sample in sample_outputs:
-                                    s = eval_obj.score(sample, ex["ground_truth"], example=ex)
-                                    sample_scores.append(s)
-                                c = sum(1 for s in sample_scores if s >= 1.0)
-                                example_score = pass_at_k(len(sample_scores), c, pass_k)
+                                    s, info = eval_obj.score(
+                                        sample, ex["ground_truth"], example=ex
+                                    )
+                                    sample_results.append({
+                                        "output": sample[:1000],
+                                        "score": s,
+                                        "parse_status": info.get("status", "unknown"),
+                                        "parsed": info.get("parsed"),
+                                    })
+                                c = sum(1 for sr in sample_results if sr["score"] >= 1.0)
+                                example_score = pass_at_k(len(sample_results), c, pass_k)
                                 extracted = eval_obj.extract_answer(sample_outputs[0])
+                                parse_status = sample_results[0]["parse_status"]
                                 status = "ok"
                             else:
                                 output_text = sample_outputs[0]
-                                example_score = eval_obj.score(output_text, ex["ground_truth"], example=ex)
-                                extracted = eval_obj.extract_answer(output_text)
-                                status = "ok"
+                                example_score, info = eval_obj.score(
+                                    output_text, ex["ground_truth"], example=ex
+                                )
+                                extracted = info.get("parsed") or eval_obj.extract_answer(output_text)
+                                parse_status = info.get("status", "unknown")
+                                sample_results = None
+                                status = "ok" if example_score > 0 else "incorrect"
                         except torch.cuda.OutOfMemoryError:
                             torch.cuda.empty_cache()
-                            example_score, extracted, status = 0.0, None, "oom"
+                            example_score, extracted, parse_status = 0.0, None, "oom"
+                            status = "oom"
+                            sample_results = None
                             sample_outputs = [None]
-                        except Exception:
-                            example_score, extracted, status = 0.0, None, "error"
+                        except Exception as exc:
+                            example_score, extracted = 0.0, None
+                            parse_status = "error"
+                            status = "error"
+                            sample_results = None
                             sample_outputs = [None]
+                            tb = traceback.format_exception_only(type(exc), exc)
 
-                        state["examples"][model_key][eval_name].append({
+                        record = {
                             "idx": idx,
+                            "example_id": ex["example_id"],
                             "question": str(ex["question"])[:500],
-                            "ground_truth": str(ex["ground_truth"]),
-                            "model_output": (sample_outputs[0] or "")[:1000] if sample_outputs[0] else None,
+                            "ground_truth": _serialize_gt(ex["ground_truth"]),
+                            "model_output": _safe_trunc(sample_outputs[0], 1000),
                             "extracted": str(extracted)[:500] if extracted else None,
+                            "parse_status": parse_status,
                             "score": example_score,
                             "status": status,
-                        })
+                        }
+                        if sample_results is not None:
+                            record["samples"] = sample_results
+                        if status == "error":
+                            record["error"] = "".join(tb)[:500] if "tb" in dir() else "unknown"
 
-                        if status != "ok":
-                            failed += 1
-                        else:
+                        state["examples"][model_key][eval_name].append(record)
+
+                        if status in ("ok", "incorrect"):
                             total_score += example_score
                             if example_score >= 1.0:
                                 correct += 1
+                        else:
+                            failed += 1
 
                         pbar.update(1)
 
-                    _save_state(partial_file, state)
+                    total_score_time += time.time() - score_start
+                    _save_state_atomic(partial_file, state)
+                    batch_idx += current_batch_size
 
                 pbar.close()
 
@@ -286,20 +407,32 @@ def evaluate(
                     "_complete": True,
                 }
 
-                tokens_per_sec = (n_total * max_new_tokens) / elapsed if elapsed > 0 else 0
-                print(f"    {eval_name}: {avg_score:.1%} ({correct}/{n_total}) "
-                      f"[{elapsed:.1f}s, ~{tokens_per_sec:.0f} tok/s]")
+                gen_tok_per_sec = total_gen_tokens / total_gen_time if total_gen_time > 0 else 0
+                state.setdefault("timing", {}).setdefault(model_key, {})[eval_name] = {
+                    "total_seconds": round(elapsed, 1),
+                    "generation_seconds": round(total_gen_time, 1),
+                    "scoring_seconds": round(total_score_time, 1),
+                    "generated_tokens": total_gen_tokens,
+                    "tokens_per_second": round(gen_tok_per_sec, 1),
+                    "examples_per_second": round(n_total / elapsed, 2) if elapsed > 0 else 0,
+                }
 
-                _save_state(partial_file, state)
+                print(f"    {eval_name}: {avg_score:.1%} ({correct}/{n_total}) "
+                      f"[{elapsed:.1f}s, {gen_tok_per_sec:.0f} tok/s gen, "
+                      f"{total_score_time:.1f}s scoring]")
+
+                _save_state_atomic(partial_file, state)
 
             del model
             del tokenizer
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+            current_batch_size = batch_size
+
     except KeyboardInterrupt:
         print("\nInterrupted. Saving partial results...")
-        _save_state(partial_file, state)
+        _save_state_atomic(partial_file, state)
         print(f"Partial results saved to {partial_file}")
         return partial_file
 
@@ -307,7 +440,8 @@ def evaluate(
         for eval_name in state["results"][model_key]:
             state["results"][model_key][eval_name].pop("_complete", None)
 
-    _save_state(final_file, state)
+    state["completed"] = datetime.now().isoformat(timespec="seconds")
+    _save_state_atomic(final_file, state)
 
     if os.path.exists(partial_file):
         os.remove(partial_file)
@@ -316,8 +450,23 @@ def evaluate(
 
     if len(models) > 1:
         chart_path = os.path.join(output_dir, f"{timestamp}_comparison.png")
-        plot_comparison(state["results"], chart_path)
-        print(f"Comparison chart saved to {chart_path}")
+        try:
+            plot_comparison(state["results"], chart_path)
+            print(f"Comparison chart saved to {chart_path}")
+        except Exception as e:
+            print(f"Warning: chart generation failed: {e}")
 
     print(f"Results saved to {final_file}")
     return final_file
+
+
+def _serialize_gt(ground_truth) -> str | list:
+    if isinstance(ground_truth, list):
+        return ground_truth
+    return str(ground_truth)
+
+
+def _safe_trunc(text, limit: int) -> str | None:
+    if text is None:
+        return None
+    return str(text)[:limit]

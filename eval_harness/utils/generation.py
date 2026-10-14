@@ -1,12 +1,8 @@
-import signal
-import sys
+from __future__ import annotations
+
 import threading
 
 import torch
-
-
-class _GenerationTimeout(Exception):
-    pass
 
 
 def _generate_with_timeout(model, input_ids, attention_mask, gen_kwargs, timeout: int):
@@ -15,7 +11,7 @@ def _generate_with_timeout(model, input_ids, attention_mask, gen_kwargs, timeout
 
     def _run():
         try:
-            with torch.no_grad():
+            with torch.inference_mode():
                 result[0] = model.generate(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
@@ -24,12 +20,20 @@ def _generate_with_timeout(model, input_ids, attention_mask, gen_kwargs, timeout
         except Exception as e:
             error[0] = e
 
-    thread = threading.Thread(target=_run)
+    thread = threading.Thread(target=_run, daemon=True)
     thread.start()
     thread.join(timeout=timeout)
 
     if thread.is_alive():
-        raise TimeoutError(f"Generation timed out after {timeout}s")
+        # Thread cannot be killed in Python; mark as timed out.
+        # The daemon thread will be cleaned up on process exit.
+        # The GPU memory from this generation will persist until the
+        # next cuda.empty_cache() or model deletion.
+        raise TimeoutError(
+            f"Generation timed out after {timeout}s. "
+            f"The background thread may still be running — "
+            f"consider reducing max_new_tokens or batch_size."
+        )
     if error[0] is not None:
         raise error[0]
     return result[0]
@@ -42,7 +46,7 @@ def batched_generate(
     max_new_tokens: int = 512,
     temperature: float = 0.0,
     batch_size: int = 8,
-    timeout: int = 30,
+    timeout: int = 120,
     num_return_sequences: int = 1,
 ) -> list[list[str]]:
     all_outputs: list[list[str]] = []
