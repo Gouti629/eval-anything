@@ -9,7 +9,7 @@
   delimiter: "####"
 
 - name: math
-  dataset: HuggingFaceTB/MATH
+  dataset: lighteval/MATH
   split: test
   question_field: problem
   answer_field: solution
