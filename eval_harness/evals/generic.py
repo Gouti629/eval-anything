@@ -115,20 +115,22 @@ class GenericEval:
         return self._scorer_fn(generated, ground_truth if isinstance(ground_truth, str) else str(ground_truth), **kwargs)
 
     def extract_answer(self, generated: str) -> str | None:
+        from eval_harness.rewards.scorers import _strip_think
+        clean = _strip_think(generated)
         if self.scorer_name == "number_extract":
-            if self.delimiter and self.delimiter in generated:
-                return generated.split(self.delimiter)[-1].strip()
+            if self.delimiter and self.delimiter in clean:
+                return clean.split(self.delimiter)[-1].strip()
             import re
-            numbers = re.findall(r"-?\d+\.?\d*", generated)
+            numbers = re.findall(r"-?\d+\.?\d*", clean)
             return numbers[-1] if numbers else None
         if self.scorer_name == "boxed_latex":
             from eval_harness.rewards.scorers import _extract_boxed
-            return _extract_boxed(generated)
+            return _extract_boxed(clean)
         if self.scorer_name == "letter_match":
             import re
-            match = re.search(r"[A-D]", generated.upper())
+            match = re.search(r"[A-D]", clean.upper())
             return match.group(0) if match else None
         if self.scorer_name == "code_exec":
             from eval_harness.rewards.scorers import _extract_code
-            return _extract_code(generated)
-        return generated.strip()[:100] if generated else None
+            return _extract_code(clean)
+        return clean.strip()[:100] if clean else None

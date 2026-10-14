@@ -1,6 +1,6 @@
 - name: gsm8k
   dataset: openai/gsm8k
-  config: ['main', 'socratic']
+  config: ['main']
   split: test
   question_field: question
   answer_field: answer

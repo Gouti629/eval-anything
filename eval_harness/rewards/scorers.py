@@ -3,6 +3,13 @@ import re
 from eval_harness.rewards.code_execution import execute_code
 
 
+def _strip_think(text: str) -> str:
+    result = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    if "<think>" in result:
+        result = re.sub(r"<think>.*", "", result, flags=re.DOTALL)
+    return result.strip()
+
+
 def exact_match(output: str, ground_truth: str, **kwargs) -> float:
     a = " ".join(output.strip().lower().split())
     b = " ".join(ground_truth.strip().lower().split())
@@ -18,11 +25,12 @@ def _normalize_number(s: str) -> float | None:
 
 
 def number_extract(output: str, ground_truth: str, delimiter: str | None = None, **kwargs) -> float:
+    clean = _strip_think(output)
     extracted = None
-    if delimiter and delimiter in output:
-        extracted = output.split(delimiter)[-1].strip()
+    if delimiter and delimiter in clean:
+        extracted = clean.split(delimiter)[-1].strip()
     if extracted is None:
-        numbers = re.findall(r"-?\d+\.?\d*", output)
+        numbers = re.findall(r"-?\d+\.?\d*", clean)
         extracted = numbers[-1] if numbers else ""
 
     gt_text = ground_truth
@@ -67,9 +75,10 @@ def _normalize_latex(s: str) -> str:
 
 
 def boxed_latex(output: str, ground_truth: str, **kwargs) -> float:
-    extracted = _extract_boxed(output)
+    clean = _strip_think(output)
+    extracted = _extract_boxed(clean)
     if extracted is None:
-        numbers = re.findall(r"-?\d+\.?\d*", output)
+        numbers = re.findall(r"-?\d+\.?\d*", clean)
         extracted = numbers[-1] if numbers else ""
 
     gt = _extract_boxed(ground_truth) or ground_truth
@@ -85,7 +94,8 @@ def boxed_latex(output: str, ground_truth: str, **kwargs) -> float:
 
 
 def letter_match(output: str, ground_truth: str, **kwargs) -> float:
-    match = re.search(r"[A-D]", output.upper())
+    clean = _strip_think(output)
+    match = re.search(r"[A-D]", clean.upper())
     if match is None:
         return 0.0
     return 1.0 if match.group(0) == ground_truth.strip().upper() else 0.0

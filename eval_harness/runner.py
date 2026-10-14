@@ -190,8 +190,8 @@ def evaluate(
                             ex = data[idx]
                             state["examples"][model_key][eval_name].append({
                                 "idx": idx,
-                                "question": str(ex["question"])[:200],
-                                "ground_truth": str(ex["ground_truth"])[:200],
+                                "question": str(ex["question"])[:500],
+                                "ground_truth": str(ex["ground_truth"]),
                                 "model_output": None,
                                 "extracted": None,
                                 "score": 0.0,
@@ -207,8 +207,8 @@ def evaluate(
                             ex = data[idx]
                             state["examples"][model_key][eval_name].append({
                                 "idx": idx,
-                                "question": str(ex["question"])[:200],
-                                "ground_truth": str(ex["ground_truth"])[:200],
+                                "question": str(ex["question"])[:500],
+                                "ground_truth": str(ex["ground_truth"]),
                                 "model_output": None,
                                 "extracted": None,
                                 "score": 0.0,
@@ -248,10 +248,10 @@ def evaluate(
 
                         state["examples"][model_key][eval_name].append({
                             "idx": idx,
-                            "question": str(ex["question"])[:200],
-                            "ground_truth": str(ex["ground_truth"])[:200],
-                            "model_output": (sample_outputs[0] or "")[:500] if sample_outputs[0] else None,
-                            "extracted": str(extracted)[:200] if extracted else None,
+                            "question": str(ex["question"])[:500],
+                            "ground_truth": str(ex["ground_truth"]),
+                            "model_output": (sample_outputs[0] or "")[:1000] if sample_outputs[0] else None,
+                            "extracted": str(extracted)[:500] if extracted else None,
                             "score": example_score,
                             "status": status,
                         })
