@@ -37,7 +37,7 @@ def main():
 
     parser.add_argument("--comment", type=str, default=None, help="Free-text comment for logging")
     parser.add_argument("--output", type=str, default="./results", help="Results directory")
-    parser.add_argument("--batch_size", type=int, default=8, help="Inference batch size")
+    parser.add_argument("--batch_size", type=int, default=256, help="Inference batch size")
     parser.add_argument("--max_new_tokens", type=int, default=512, help="Generation token limit")
     parser.add_argument("--temperature", type=float, default=0.0, help="Generation temperature (0.0 = greedy)")
     parser.add_argument("--pass_k", type=int, default=None, help="Number of samples for pass@k (code evals only)")
