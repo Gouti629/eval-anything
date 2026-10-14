@@ -10,7 +10,7 @@
 
 - name: math
   dataset: EleutherAI/hendrycks_math
-  config: allmath
+  config: ['algebra', 'counting_and_probability', 'geometry', 'intermediate_algebra', 'number_theory', 'prealgebra', 'precalculus']
   split: test
   question_field: problem
   answer_field: solution
