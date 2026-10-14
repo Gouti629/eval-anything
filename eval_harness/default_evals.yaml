@@ -1,6 +1,6 @@
 - name: gsm8k
   dataset: openai/gsm8k
-  config: [main, socratic]
+  config: all
   split: test
   question_field: question
   answer_field: answer
@@ -10,7 +10,7 @@
 
 - name: math
   dataset: EleutherAI/hendrycks_math
-  config: ['algebra', 'counting_and_probability', 'geometry', 'intermediate_algebra', 'number_theory', 'prealgebra', 'precalculus']
+  config: all
   split: test
   question_field: problem
   answer_field: solution
