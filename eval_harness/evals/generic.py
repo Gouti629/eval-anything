@@ -29,17 +29,33 @@ class GenericEval:
         return "pass@1" if self.is_code_eval else "accuracy"
 
     def load_data(self) -> list[dict]:
+        from datasets import concatenate_datasets
+
         kwargs = {"split": self.split}
-        if self.dataset_config:
-            ds = load_dataset(self.dataset_name, self.dataset_config, **kwargs)
+        configs = self.dataset_config
+        if configs is None:
+            configs = [None]
+        elif isinstance(configs, str):
+            configs = [configs]
+
+        datasets = []
+        for cfg in configs:
+            if cfg is not None:
+                ds = load_dataset(self.dataset_name, cfg, **kwargs)
+            else:
+                ds = load_dataset(self.dataset_name, **kwargs)
+            datasets.append(ds)
+
+        if len(datasets) == 1:
+            combined = datasets[0]
         else:
-            ds = load_dataset(self.dataset_name, **kwargs)
+            combined = concatenate_datasets(datasets)
 
         if self.filter_expr:
-            ds = ds.filter(lambda row: eval(self.filter_expr, {}, row))
+            combined = combined.filter(lambda row: eval(self.filter_expr, {}, row))
 
         results = []
-        for row in ds:
+        for row in combined:
             question = self._get_field(row, self.question_field)
             answer = self._get_field(row, self.answer_field)
             entry = {
