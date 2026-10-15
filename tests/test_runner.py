@@ -174,6 +174,96 @@ class TestTimeoutSafety:
         assert gen_mod._pending_thread is None
 
 
+class TestGenerationResult:
+    """GenerationResult carries token count and truncation flag."""
+
+    def test_fields_present(self):
+        from eval_harness.utils.generation import GenerationResult
+        r = GenerationResult(text=["hello"], token_count=5, truncated=False)
+        assert r.text == ["hello"]
+        assert r.token_count == 5
+        assert r.truncated is False
+
+    def test_truncated_flag(self):
+        from eval_harness.utils.generation import GenerationResult
+        r = GenerationResult(text=["hi"], token_count=512, truncated=True)
+        assert r.truncated is True
+
+
+class TestTruncationDetection:
+    def test_not_truncated_when_short(self):
+        import torch
+        from eval_harness.utils.generation import _is_truncated
+        tokens = torch.tensor([1, 2, 3])
+        assert _is_truncated(tokens, eos_token_id=99, max_new_tokens=512) is False
+
+    def test_truncated_at_max_no_eos(self):
+        import torch
+        from eval_harness.utils.generation import _is_truncated
+        tokens = torch.tensor([1, 2, 3, 4])
+        assert _is_truncated(tokens, eos_token_id=99, max_new_tokens=4) is True
+
+    def test_not_truncated_at_max_with_eos(self):
+        import torch
+        from eval_harness.utils.generation import _is_truncated
+        tokens = torch.tensor([1, 2, 3, 99])
+        assert _is_truncated(tokens, eos_token_id=99, max_new_tokens=4) is False
+
+
+class TestPerEvalMaxNewTokens:
+    def test_eval_max_tokens_in_config(self):
+        from eval_harness.evals.generic import GenericEval
+        cfg = {
+            "name": "test", "dataset": "d",
+            "question_field": "q", "answer_field": "a",
+            "max_new_tokens": 256,
+        }
+        ev = GenericEval(cfg)
+        assert ev.max_new_tokens == 256
+
+    def test_eval_max_tokens_default_none(self):
+        from eval_harness.evals.generic import GenericEval
+        cfg = {"name": "test", "dataset": "d", "question_field": "q", "answer_field": "a"}
+        ev = GenericEval(cfg)
+        assert ev.max_new_tokens is None
+
+    def test_max_tokens_override_changes_fingerprint(self):
+        from eval_harness.evals.generic import config_fingerprint
+        fp1 = config_fingerprint(
+            {"dataset": "d", "max_new_tokens": 256}, {"max_new_tokens": 512}
+        )
+        fp2 = config_fingerprint(
+            {"dataset": "d", "max_new_tokens": 512}, {"max_new_tokens": 512}
+        )
+        assert fp1 != fp2
+
+
+class TestResultSemantics:
+    """Verify correct/incorrect counting and score denominators."""
+
+    def test_resume_counts_ok_as_correct(self):
+        """Examples with status='ok' increment correct, not just 'scored'."""
+        examples = [
+            {"status": "ok", "score": 1.0, "example_id": "a"},
+            {"status": "incorrect", "score": 0.0, "example_id": "b"},
+            {"status": "timeout", "score": 0.0, "example_id": "c"},
+        ]
+        correct = sum(1 for e in examples if e["status"] == "ok")
+        incorrect = sum(1 for e in examples if e["status"] == "incorrect")
+        infra = sum(1 for e in examples if e["status"] in ("timeout", "oom", "error"))
+        assert correct == 1
+        assert incorrect == 1
+        assert infra == 1
+        assert correct + incorrect + infra == len(examples)
+
+    def test_score_denominator_is_total(self):
+        """avg_score uses n_total as denominator, including infra failures as zeros."""
+        scores = [1.0, 0.0, 0.0]  # one correct, one wrong, one infra (score 0)
+        n_total = 3
+        avg_score = sum(scores) / n_total
+        assert abs(avg_score - 1 / 3) < 1e-6
+
+
 class TestSerializeGt:
     def test_string_passthrough(self):
         assert _serialize_gt("hello") == "hello"

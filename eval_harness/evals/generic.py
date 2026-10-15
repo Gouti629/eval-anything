@@ -118,6 +118,7 @@ def config_fingerprint(config: dict, gen_params: dict) -> str:
         "delimiter": config.get("delimiter"),
         "prepend_prompt": config.get("prepend_prompt", False),
         "system_prompt": config.get("system_prompt", ""),
+        "max_new_tokens_override": config.get("max_new_tokens"),
         **gen_params,
     }, sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
@@ -142,6 +143,7 @@ class GenericEval:
         self.delimiter = config.get("delimiter", None)
         self.choices_field = config.get("choices_field", None)
         self.prepend_prompt = config.get("prepend_prompt", False)
+        self.max_new_tokens = config.get("max_new_tokens", None)
         self.think = think
         self._scorer_fn = SCORERS[self.scorer_name]
 

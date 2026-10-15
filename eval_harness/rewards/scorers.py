@@ -46,38 +46,53 @@ def _normalize_number(s: str) -> float | None:
         return None
 
 
-_NUMBER_RE = re.compile(r"-?\d+(?:,\d{3})*(?:\.\d+)?(?:[eE][+-]?\d+)?|\d+/\d+")
+_NUMBER_RE = re.compile(
+    r"-?\d+/\d+"
+    r"|-?\d+(?:,\d{3})*(?:\.\d+)?(?:[eE][+-]?\d+)?",
+)
 
 
-def number_extract(output: str, ground_truth: str, delimiter: str | None = None, **kwargs) -> tuple[float, dict]:
-    clean = _strip_think(output)
-    extracted = None
-    if delimiter and delimiter in clean:
-        extracted = clean.split(delimiter)[-1].strip()
-        nums = _NUMBER_RE.findall(extracted)
-        if nums:
-            extracted = nums[0]
-    if extracted is None:
-        numbers = _NUMBER_RE.findall(clean)
-        extracted = numbers[-1] if numbers else ""
-
+def _extract_gt_number(ground_truth: str, delimiter: str | None) -> str:
     gt_text = ground_truth
     if delimiter and delimiter in ground_truth:
         gt_text = ground_truth.split(delimiter)[-1].strip()
     gt_nums = _NUMBER_RE.findall(gt_text)
-    if gt_nums:
-        gt_text = gt_nums[0]
+    return gt_nums[0] if gt_nums else gt_text
 
-    if not extracted:
-        return 0.0, {"parsed": None, "status": "missing"}
+
+def number_extract(output: str, ground_truth: str, delimiter: str | None = None, **kwargs) -> tuple[float, dict]:
+    clean = _strip_think(output)
+
+    extracted = None
+    method = "missing"
+
+    if delimiter and delimiter in clean:
+        after_delim = clean.split(delimiter)[-1].strip()
+        nums = _NUMBER_RE.findall(after_delim)
+        if nums:
+            extracted = nums[0]
+            method = "delimiter"
+
+    if extracted is None:
+        numbers = _NUMBER_RE.findall(clean)
+        if numbers:
+            extracted = numbers[-1]
+            method = "fallback_last_number"
+
+    if extracted is None:
+        return 0.0, {"parsed": None, "status": "missing", "method": method}
 
     gen_val = _normalize_number(extracted)
+    if gen_val is None:
+        return 0.0, {"parsed": extracted, "status": "parse_error", "method": method}
+
+    gt_text = _extract_gt_number(ground_truth, delimiter)
     gt_val = _normalize_number(gt_text)
-    if gen_val is not None and gt_val is not None:
-        score = 1.0 if abs(gen_val - gt_val) < 1e-6 else 0.0
-        return score, {"parsed": extracted, "status": "parsed"}
-    score = 1.0 if extracted.strip().lower() == gt_text.strip().lower() else 0.0
-    return score, {"parsed": extracted, "status": "parsed"}
+    if gt_val is None:
+        return 0.0, {"parsed": extracted, "status": "parsed", "method": method}
+
+    score = 1.0 if abs(gen_val - gt_val) < 1e-6 else 0.0
+    return score, {"parsed": extracted, "status": "parsed", "method": method}
 
 
 def _extract_boxed(text: str) -> str | None:

@@ -74,13 +74,23 @@ def _is_example_done(state: dict, model_key: str, eval_name: str, example_id: st
 
 
 def _build_manifest(models, eval_configs, gen_params, device, think):
+    gpu_name = None
+    if device.startswith("cuda") and torch.cuda.is_available():
+        idx = 0
+        if ":" in device:
+            try:
+                idx = int(device.split(":")[1])
+            except ValueError:
+                pass
+        gpu_name = torch.cuda.get_device_name(idx)
+
     return {
         "models": models,
         "eval_configs": eval_configs,
         "generation": gen_params,
         "device": device,
+        "gpu": gpu_name,
         "think": think,
-        "precision": "bfloat16",
         "python_version": sys.version,
         "torch_version": torch.__version__,
         "platform": platform.platform(),
@@ -184,6 +194,11 @@ def evaluate(
             print(f"\nLoading model: {model_path}")
             model, tokenizer = load_model(model_path, device=device)
 
+            model_info = state["manifest"].setdefault("model_info", {})
+            model_info[model_key] = {
+                "dtype": str(model.dtype).replace("torch.", ""),
+            }
+
             if model_key not in state["results"]:
                 state["results"][model_key] = {}
             if model_key not in state["examples"]:
@@ -206,6 +221,7 @@ def evaluate(
                 if eval_name not in state["examples"][model_key]:
                     state["examples"][model_key][eval_name] = []
 
+                eval_max_tokens = eval_obj.max_new_tokens or max_new_tokens
                 use_pass_k = pass_k is not None and eval_obj.is_code_eval
                 num_samples = pass_k if use_pass_k else 1
                 sample_temp = temperature if temperature > 0 else (0.8 if use_pass_k else 0.0)
@@ -213,10 +229,10 @@ def evaluate(
                 total_score = 0.0
                 correct = 0
                 incorrect = 0
-                parse_failed = 0
                 timed_out = 0
                 oom_count = 0
                 errored = 0
+                truncated_count = 0
                 n_done = 0
                 total_gen_tokens = 0
                 total_gen_time = 0.0
@@ -265,7 +281,7 @@ def evaluate(
                             model,
                             tokenizer,
                             prompts,
-                            max_new_tokens=max_new_tokens,
+                            max_new_tokens=eval_max_tokens,
                             temperature=sample_temp,
                             batch_size=len(prompts),
                             timeout=120,
@@ -317,15 +333,14 @@ def evaluate(
                         batch_idx += current_batch_size
                         continue
 
-                    # Approximate token count via re-tokenization of decoded text.
-                    # True generated token IDs are not available after batch_decode.
-                    for out_seqs in outputs:
-                        for seq in out_seqs:
-                            total_gen_tokens += len(tokenizer.encode(seq, add_special_tokens=False))
+                    for gen_result in outputs:
+                        total_gen_tokens += gen_result.token_count
 
                     score_start = time.time()
                     for j, (idx, ex) in enumerate(zip(batch_indices, batch_examples)):
-                        sample_outputs = outputs[j]
+                        gen_result = outputs[j]
+                        sample_outputs = gen_result.text
+                        was_truncated = gen_result.truncated
 
                         try:
                             if use_pass_k:
@@ -344,7 +359,7 @@ def evaluate(
                                 example_score = pass_at_k(len(sample_results), c, pass_k)
                                 extracted = eval_obj.extract_answer(sample_outputs[0])
                                 parse_status = sample_results[0]["parse_status"]
-                                status = "ok"
+                                status = "ok" if example_score > 0 else "incorrect"
                             else:
                                 output_text = sample_outputs[0]
                                 example_score, info = eval_obj.score(
@@ -378,6 +393,7 @@ def evaluate(
                             "parse_status": parse_status,
                             "score": example_score,
                             "status": status,
+                            "truncated": was_truncated,
                         }
                         if sample_results is not None:
                             record["samples"] = sample_results
@@ -386,6 +402,8 @@ def evaluate(
 
                         state["examples"][model_key][eval_name].append(record)
 
+                        if was_truncated:
+                            truncated_count += 1
                         if status == "ok":
                             total_score += example_score
                             correct += 1
@@ -426,6 +444,8 @@ def evaluate(
                     "errored": errored,
                     "scored": scored_count,
                     "infra_failures": infra_failures,
+                    "truncated": truncated_count,
+                    "max_new_tokens": eval_max_tokens,
                     "metric": metric,
                     "_complete": True,
                 }
@@ -438,6 +458,8 @@ def evaluate(
                     "generated_tokens": total_gen_tokens,
                     "tokens_per_second": round(gen_tok_per_sec, 1),
                     "examples_per_second": round(n_total / elapsed, 2) if elapsed > 0 else 0,
+                    "requested_batch_size": batch_size,
+                    "effective_batch_size": current_batch_size,
                 }
 
                 infra_msg = ""

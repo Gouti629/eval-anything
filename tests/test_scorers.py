@@ -107,6 +107,127 @@ class TestNumberExtract:
         score, info = number_extract(output, "3")
         assert score == 1.0
 
+    def test_fraction(self):
+        score, info = number_extract("The answer is 1/2", "0.5")
+        assert score == 1.0
+        assert info["parsed"] == "1/2"
+
+    def test_negative_fraction(self):
+        score, info = number_extract("Result: -3/4", "-0.75")
+        assert score == 1.0
+        assert info["parsed"] == "-3/4"
+
+    def test_delimiter_method_reported(self):
+        _, info = number_extract("blah #### 42", "42", delimiter="####")
+        assert info["method"] == "delimiter"
+
+    def test_fallback_method_reported(self):
+        _, info = number_extract("I think 42", "42")
+        assert info["method"] == "fallback_last_number"
+
+    def test_missing_method_reported(self):
+        _, info = number_extract("no numbers", "42")
+        assert info["method"] == "missing"
+
+    def test_empty_after_delimiter(self):
+        score, info = number_extract("blah #### ", "42", delimiter="####")
+        assert score == 0.0
+        assert info["status"] == "missing"
+
+    def test_text_after_delimiter_no_number(self):
+        score, info = number_extract("blah #### hello", "42", delimiter="####")
+        assert score == 0.0
+        assert info["status"] == "missing"
+
+    def test_multiple_delimiters_takes_last(self):
+        score, info = number_extract("#### 10 then #### 42", "42", delimiter="####")
+        assert score == 1.0
+        assert info["parsed"] == "42"
+
+
+class TestGSM8KThinkBlockExtraction:
+    """Regression tests for think-block interaction with number extraction."""
+
+    def test_closed_think_then_delimiter(self):
+        output = "<think>7+8=15, 15*2=30</think>#### 42"
+        score, info = number_extract(output, "42", delimiter="####")
+        assert score == 1.0
+        assert info["parsed"] == "42"
+        assert info["method"] == "delimiter"
+
+    def test_unclosed_think_no_final_answer(self):
+        output = "<think>Let me work through this: 7 + 8 = 15"
+        score, info = number_extract(output, "42", delimiter="####")
+        assert score == 0.0
+        assert info["method"] == "fallback_last_number"
+
+    def test_unclosed_think_contains_delimiter(self):
+        output = "<think>The student wrote #### 42 but I need to verify"
+        score, info = number_extract(output, "42", delimiter="####")
+        assert score == 1.0
+        assert info["parsed"] == "42"
+
+    def test_response_ends_after_delimiter(self):
+        output = "The answer is ####"
+        score, info = number_extract(output, "42", delimiter="####")
+        assert score == 0.0
+        assert info["status"] == "missing"
+
+    def test_reasoning_numbers_no_marker(self):
+        output = "First 10 apples, then 20 apples, then 5 more"
+        score, info = number_extract(output, "35")
+        assert score == 0.0
+        assert info["parsed"] == "5"
+        assert info["method"] == "fallback_last_number"
+
+    def test_delimiter_then_non_numeric(self):
+        output = "Let me solve this #### approximately thirty"
+        score, info = number_extract(output, "30", delimiter="####")
+        assert score == 0.0
+        assert info["status"] == "missing"
+
+    def test_wrong_answer_is_not_parse_failure(self):
+        score, info = number_extract("#### 43", "42", delimiter="####")
+        assert score == 0.0
+        assert info["status"] == "parsed"
+        assert info["parsed"] == "43"
+
+    def test_missing_answer_is_not_correct(self):
+        score, info = number_extract("I cannot solve this", "0")
+        assert score == 0.0
+        assert info["status"] == "missing"
+
+
+class TestFractionRegression:
+    """Fractions must match as a single value, not split into two integers."""
+
+    def test_simple_fraction(self):
+        score, info = number_extract("1/2", "0.5")
+        assert score == 1.0
+        assert info["parsed"] == "1/2"
+
+    def test_negative_fraction(self):
+        score, info = number_extract("-1/2", "-0.5")
+        assert score == 1.0
+        assert info["parsed"] == "-1/2"
+
+    def test_fraction_in_context(self):
+        score, info = number_extract("The probability is 3/4", "0.75")
+        assert score == 1.0
+        assert info["parsed"] == "3/4"
+
+    def test_fraction_with_delimiter(self):
+        score, info = number_extract("work... #### 1/3", "1/3", delimiter="####")
+        assert score == 1.0
+
+    def test_zero_denominator_handled(self):
+        from eval_harness.rewards.scorers import _normalize_number
+        assert _normalize_number("1/0") is None
+
+    def test_malformed_not_fraction(self):
+        from eval_harness.rewards.scorers import _normalize_number
+        assert _normalize_number("abc") is None
+
 
 # === boxed_latex ===
 
