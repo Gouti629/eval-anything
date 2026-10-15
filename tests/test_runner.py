@@ -264,6 +264,66 @@ class TestResultSemantics:
         assert abs(avg_score - 1 / 3) < 1e-6
 
 
+class TestPlotComparison:
+    """plot_comparison must handle models with different eval subsets."""
+
+    def test_different_eval_subsets_no_crash(self):
+        import tempfile
+        from eval_harness.plotting.compare import plot_comparison
+        results = {
+            "model_a": {
+                "gsm8k": {"score": 0.8},
+                "mmlu": {"score": 0.7},
+            },
+            "model_b": {
+                "gsm8k": {"score": 0.6},
+            },
+        }
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "chart.png")
+            plot_comparison(results, path)
+            assert os.path.exists(path)
+
+    def test_no_shared_evals(self):
+        import tempfile
+        from eval_harness.plotting.compare import plot_comparison
+        results = {
+            "model_a": {"gsm8k": {"score": 0.8}},
+            "model_b": {"mmlu": {"score": 0.6}},
+        }
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "chart.png")
+            plot_comparison(results, path)
+            assert os.path.exists(path)
+
+
+class TestLimitOption:
+    """--limit N must affect fingerprint and be validated."""
+
+    def test_limit_changes_fingerprint(self):
+        fp1 = _run_fingerprint(["m1"], [{"dataset": "d"}], {"bs": 8, "limit": None})
+        fp2 = _run_fingerprint(["m1"], [{"dataset": "d"}], {"bs": 8, "limit": 10})
+        assert fp1 != fp2
+
+    def test_limit_zero_raises(self):
+        from eval_harness.runner import evaluate
+        with pytest.raises(ValueError, match="limit must be >= 1"):
+            evaluate(
+                models=["m"], eval_configs=[{"name": "t", "dataset": "d",
+                    "question_field": "q", "answer_field": "a"}],
+                limit=0,
+            )
+
+    def test_limit_negative_raises(self):
+        from eval_harness.runner import evaluate
+        with pytest.raises(ValueError, match="limit must be >= 1"):
+            evaluate(
+                models=["m"], eval_configs=[{"name": "t", "dataset": "d",
+                    "question_field": "q", "answer_field": "a"}],
+                limit=-5,
+            )
+
+
 class TestSerializeGt:
     def test_string_passthrough(self):
         assert _serialize_gt("hello") == "hello"

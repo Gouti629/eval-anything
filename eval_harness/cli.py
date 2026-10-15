@@ -45,6 +45,7 @@ def main():
     parser.add_argument("--pass_k", type=int, default=None, help="Number of samples for pass@k (code evals only)")
     parser.add_argument("--device", type=str, default="cuda", help="Device for inference")
     parser.add_argument("--think", action="store_true", help="Enable thinking mode (keep <think> token in prompt)")
+    parser.add_argument("--limit", type=int, default=None, help="Evaluate only the first N examples per eval")
 
     args = parser.parse_args()
 
@@ -67,6 +68,7 @@ def main():
         pass_k=args.pass_k,
         device=args.device,
         think=args.think,
+        limit=args.limit,
     )
 
 

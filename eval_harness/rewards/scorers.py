@@ -5,16 +5,25 @@ import re
 from eval_harness.rewards.code_execution import execute_code
 
 
+_ANSWER_MARKER_RE = re.compile(r"####\s*")
+
+
 def _strip_think(text: str) -> str:
     result = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    if "<think>" in result:
-        before = result[:result.index("<think>")]
-        after = result[result.index("<think>") + len("<think>"):]
-        if before.strip():
-            result = before
-        else:
-            result = after
-    return result.strip()
+    if "<think>" not in result:
+        return result.strip()
+
+    before = result[:result.index("<think>")]
+    after = result[result.index("<think>") + len("<think>"):]
+
+    if before.strip():
+        return before.strip()
+
+    m = _ANSWER_MARKER_RE.search(after)
+    if m:
+        return after[m.start():].strip()
+
+    return ""
 
 
 def exact_match(output: str, ground_truth: str, **kwargs) -> tuple[float, dict]:

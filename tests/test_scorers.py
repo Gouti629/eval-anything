@@ -20,9 +20,9 @@ class TestStripThink:
     def test_closed_think(self):
         assert _strip_think("<think>reasoning</think>The answer is 42") == "The answer is 42"
 
-    def test_unclosed_think(self):
+    def test_unclosed_think_no_marker_returns_empty(self):
         result = _strip_think("<think>reasoning about stuff 123 456")
-        assert "reasoning" in result
+        assert result == ""
 
     def test_no_think(self):
         assert _strip_think("plain text") == "plain text"
@@ -33,10 +33,10 @@ class TestStripThink:
         assert "middle" in result
         assert "end" in result
 
-    def test_unclosed_preserves_content(self):
+    def test_unclosed_no_marker_discards_reasoning(self):
         text = "<think>The answer is clearly 3. So the total is 2 + 1 = 3."
         result = _strip_think(text)
-        assert "3" in result
+        assert result == ""
 
     def test_empty_after_closed_think(self):
         text = "<think>all reasoning no answer</think>"
@@ -47,6 +47,21 @@ class TestStripThink:
         text = "The answer is 42<think>let me reconsider..."
         result = _strip_think(text)
         assert "42" in result
+
+    def test_unclosed_think_recovers_marker(self):
+        text = "<think>reasoning blah blah #### 42"
+        result = _strip_think(text)
+        assert "#### 42" in result
+
+    def test_unclosed_think_truncated_no_answer(self):
+        text = "<think>Let me calculate 2+3=5 and 5*2=10"
+        result = _strip_think(text)
+        assert result == ""
+
+    def test_closed_then_unclosed_think(self):
+        text = "<think>first</think>answer<think>second unclosed"
+        result = _strip_think(text)
+        assert "answer" in result
 
 
 # === number_extract ===
@@ -102,10 +117,11 @@ class TestNumberExtract:
         score, info = number_extract(output, "30", delimiter="####")
         assert score == 1.0
 
-    def test_unclosed_think_extracts_last_number(self):
+    def test_unclosed_think_no_marker_yields_missing(self):
         output = "<think>The answer is 2 + 1 = 3"
         score, info = number_extract(output, "3")
-        assert score == 1.0
+        assert score == 0.0
+        assert info["status"] == "missing"
 
     def test_fraction(self):
         score, info = number_extract("The answer is 1/2", "0.5")
@@ -159,13 +175,14 @@ class TestGSM8KThinkBlockExtraction:
         output = "<think>Let me work through this: 7 + 8 = 15"
         score, info = number_extract(output, "42", delimiter="####")
         assert score == 0.0
-        assert info["method"] == "fallback_last_number"
+        assert info["status"] == "missing"
 
-    def test_unclosed_think_contains_delimiter(self):
+    def test_unclosed_think_recovers_answer_marker(self):
         output = "<think>The student wrote #### 42 but I need to verify"
         score, info = number_extract(output, "42", delimiter="####")
         assert score == 1.0
         assert info["parsed"] == "42"
+        assert info["method"] == "delimiter"
 
     def test_response_ends_after_delimiter(self):
         output = "The answer is ####"

@@ -137,6 +137,7 @@ def evaluate(
     pass_k: int | None = None,
     device: str = "cuda",
     think: bool = False,
+    limit: int | None = None,
 ) -> str:
     for cfg in eval_configs:
         errors = validate_config(cfg)
@@ -149,6 +150,8 @@ def evaluate(
         raise ValueError(f"max_new_tokens must be >= 1, got {max_new_tokens}")
     if pass_k is not None and pass_k < 1:
         raise ValueError(f"pass_k must be >= 1, got {pass_k}")
+    if limit is not None and limit < 1:
+        raise ValueError(f"limit must be >= 1, got {limit}")
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -157,6 +160,7 @@ def evaluate(
         "max_new_tokens": max_new_tokens,
         "temperature": temperature,
         "pass_k": pass_k,
+        "limit": limit,
     }
 
     fingerprint = _run_fingerprint(models, eval_configs, gen_params, think=think)
@@ -217,6 +221,8 @@ def evaluate(
 
                 print(f"  Running {eval_name}...")
                 data = eval_obj.load_data()
+                if limit is not None:
+                    data = data[:limit]
 
                 if eval_name not in state["examples"][model_key]:
                     state["examples"][model_key][eval_name] = []

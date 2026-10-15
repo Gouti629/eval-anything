@@ -15,7 +15,13 @@ def plot_comparison(results: dict, output_path: str):
     if len(model_names) < 2:
         return
 
-    eval_names = list(results[model_names[0]].keys())
+    all_evals = set()
+    for m in model_names:
+        all_evals.update(results[m].keys())
+    eval_names = sorted(all_evals)
+    if not eval_names:
+        return
+
     short_names = [sanitize_model_name(m) for m in model_names]
 
     x = np.arange(len(eval_names))
@@ -24,7 +30,7 @@ def plot_comparison(results: dict, output_path: str):
     fig, ax = plt.subplots(figsize=(max(8, len(eval_names) * 2), 6))
 
     for i, (model, short) in enumerate(zip(model_names, short_names)):
-        scores = [results[model][e]["score"] for e in eval_names]
+        scores = [results[model].get(e, {}).get("score", 0) for e in eval_names]
         offset = (i - len(model_names) / 2 + 0.5) * width
         bars = ax.bar(x + offset, scores, width, label=short)
         for bar, score in zip(bars, scores):
