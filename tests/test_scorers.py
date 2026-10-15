@@ -20,9 +20,9 @@ class TestStripThink:
     def test_closed_think(self):
         assert _strip_think("<think>reasoning</think>The answer is 42") == "The answer is 42"
 
-    def test_unclosed_think_no_marker_returns_empty(self):
+    def test_unclosed_think_keeps_after(self):
         result = _strip_think("<think>reasoning about stuff 123 456")
-        assert result == ""
+        assert result == "reasoning about stuff 123 456"
 
     def test_no_think(self):
         assert _strip_think("plain text") == "plain text"
@@ -33,35 +33,35 @@ class TestStripThink:
         assert "middle" in result
         assert "end" in result
 
-    def test_unclosed_no_marker_discards_reasoning(self):
+    def test_unclosed_keeps_content_after_tag(self):
         text = "<think>The answer is clearly 3. So the total is 2 + 1 = 3."
         result = _strip_think(text)
-        assert result == ""
+        assert "3" in result
 
     def test_empty_after_closed_think(self):
         text = "<think>all reasoning no answer</think>"
         result = _strip_think(text)
         assert result == ""
 
-    def test_content_before_unclosed_think(self):
+    def test_content_before_unclosed_think_returns_after(self):
         text = "The answer is 42<think>let me reconsider..."
         result = _strip_think(text)
-        assert "42" in result
+        assert result == "let me reconsider..."
 
     def test_unclosed_think_recovers_marker(self):
         text = "<think>reasoning blah blah #### 42"
         result = _strip_think(text)
         assert "#### 42" in result
 
-    def test_unclosed_think_truncated_no_answer(self):
+    def test_unclosed_think_truncated_keeps_content(self):
         text = "<think>Let me calculate 2+3=5 and 5*2=10"
         result = _strip_think(text)
-        assert result == ""
+        assert "10" in result
 
     def test_closed_then_unclosed_think(self):
         text = "<think>first</think>answer<think>second unclosed"
         result = _strip_think(text)
-        assert "answer" in result
+        assert result == "second unclosed"
 
 
 # === number_extract ===
@@ -117,11 +117,11 @@ class TestNumberExtract:
         score, info = number_extract(output, "30", delimiter="####")
         assert score == 1.0
 
-    def test_unclosed_think_no_marker_yields_missing(self):
+    def test_unclosed_think_extracts_last_number(self):
         output = "<think>The answer is 2 + 1 = 3"
         score, info = number_extract(output, "3")
-        assert score == 0.0
-        assert info["status"] == "missing"
+        assert score == 1.0
+        assert info["method"] == "fallback_last_number"
 
     def test_fraction(self):
         score, info = number_extract("The answer is 1/2", "0.5")
@@ -175,7 +175,7 @@ class TestGSM8KThinkBlockExtraction:
         output = "<think>Let me work through this: 7 + 8 = 15"
         score, info = number_extract(output, "42", delimiter="####")
         assert score == 0.0
-        assert info["status"] == "missing"
+        assert info["method"] == "fallback_last_number"
 
     def test_unclosed_think_recovers_answer_marker(self):
         output = "<think>The student wrote #### 42 but I need to verify"
@@ -292,11 +292,11 @@ class TestLetterMatch:
         assert score == 1.0
         assert info["parsed"] == "D"
 
-    def test_reasoning_mentions_multiple_letters_ambiguous(self):
-        """Multiple standalone letters without a clear final answer -> ambiguous."""
+    def test_reasoning_mentions_multiple_letters_missing(self):
+        """Multiple standalone letters without a clear final answer -> missing."""
         output = "Option A is about cats. Option B is about dogs. Both are valid."
         score, info = letter_match(output, "A")
-        assert info["status"] == "ambiguous"
+        assert info["status"] == "missing"
         assert score == 0.0
 
     def test_no_letter_at_all(self):
@@ -442,10 +442,10 @@ class TestScorerAgreement:
         assert score == 0.0
         assert info["status"] == "missing"
 
-    def test_ambiguous_means_zero_score(self):
+    def test_no_clear_answer_means_missing(self):
         score, info = letter_match("A or B, hard to say", "A")
         assert score == 0.0
-        assert info["status"] == "ambiguous"
+        assert info["status"] == "missing"
 
 
 class TestNumberExtractEdgeCases:

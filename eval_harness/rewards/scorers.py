@@ -5,25 +5,13 @@ import re
 from eval_harness.rewards.code_execution import execute_code
 
 
-_ANSWER_MARKER_RE = re.compile(r"####\s*")
-
-
 def _strip_think(text: str) -> str:
     result = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     if "<think>" not in result:
         return result.strip()
 
-    before = result[:result.index("<think>")]
     after = result[result.index("<think>") + len("<think>"):]
-
-    if before.strip():
-        return before.strip()
-
-    m = _ANSWER_MARKER_RE.search(after)
-    if m:
-        return after[m.start():].strip()
-
-    return ""
+    return after.strip()
 
 
 def exact_match(output: str, ground_truth: str, **kwargs) -> tuple[float, dict]:
@@ -188,16 +176,6 @@ def letter_match(output: str, ground_truth: str, **kwargs) -> tuple[float, dict]
         letter = stripped.upper()
         score = 1.0 if letter == ground_truth.strip().upper() else 0.0
         return score, {"parsed": letter, "status": "parsed"}
-
-    letters_found = re.findall(r"\b([A-Da-d])\b", clean)
-    if len(letters_found) == 1:
-        letter = letters_found[0].upper()
-        score = 1.0 if letter == ground_truth.strip().upper() else 0.0
-        return score, {"parsed": letter, "status": "parsed"}
-
-    if letters_found:
-        return 0.0, {"parsed": None, "status": "ambiguous",
-                      "candidates": [l.upper() for l in letters_found]}
 
     return 0.0, {"parsed": None, "status": "missing"}
 
