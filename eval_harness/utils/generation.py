@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import threading
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 
 import torch
+from transformers import StoppingCriteria
 
 
 @dataclass
@@ -13,51 +14,16 @@ class GenerationResult:
     truncated: bool
 
 
-_pending_thread: threading.Thread | None = None
-_pending_lock = threading.Lock()
+class TimeBudget(StoppingCriteria):
+    def __init__(self, seconds: int):
+        self.deadline = time.monotonic() + seconds
+        self.expired = False
 
-
-def _wait_for_pending():
-    global _pending_thread
-    with _pending_lock:
-        if _pending_thread is not None and _pending_thread.is_alive():
-            _pending_thread.join()
-        _pending_thread = None
-
-
-def _generate_with_timeout(model, input_ids, attention_mask, gen_kwargs, timeout: int):
-    _wait_for_pending()
-
-    result = [None]
-    error = [None]
-
-    def _run():
-        try:
-            with torch.inference_mode():
-                result[0] = model.generate(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    **gen_kwargs,
-                )
-        except Exception as e:
-            error[0] = e
-
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-    thread.join(timeout=timeout)
-
-    if thread.is_alive():
-        global _pending_thread
-        with _pending_lock:
-            _pending_thread = thread
-        raise TimeoutError(
-            f"Generation timed out after {timeout}s. "
-            f"The background thread is still running and will be awaited "
-            f"before the next generation call."
-        )
-    if error[0] is not None:
-        raise error[0]
-    return result[0]
+    def __call__(self, input_ids, scores, **kwargs):
+        if time.monotonic() > self.deadline:
+            self.expired = True
+            return True
+        return False
 
 
 def _is_truncated(token_ids, eos_token_id, max_new_tokens: int) -> bool:
@@ -110,13 +76,17 @@ def batched_generate(
             truncation=True,
         ).to(model.device)
 
-        output_ids = _generate_with_timeout(
-            model,
-            encoded.input_ids,
-            encoded.attention_mask,
-            gen_kwargs,
-            timeout=timeout,
-        )
+        timer = TimeBudget(timeout)
+
+        with torch.inference_mode():
+            output_ids = model.generate(
+                input_ids=encoded.input_ids,
+                attention_mask=encoded.attention_mask,
+                stopping_criteria=[timer],
+                **gen_kwargs,
+            )
+
+        timed_out = timer.expired
 
         input_len = encoded.input_ids.shape[1]
         new_tokens = output_ids[:, input_len:]
@@ -131,7 +101,7 @@ def batched_generate(
                     (seq_tokens[k] != tokenizer.pad_token_id).sum().item()
                     for k in range(seq_tokens.shape[0])
                 )
-                trunc = any(
+                trunc = timed_out or any(
                     _is_truncated(seq_tokens[k], eos_id, max_new_tokens)
                     for k in range(seq_tokens.shape[0])
                 )
@@ -144,7 +114,7 @@ def batched_generate(
             for k, text in enumerate(decoded):
                 row_tokens = new_tokens[k]
                 n_tok = (row_tokens != tokenizer.pad_token_id).sum().item()
-                trunc = _is_truncated(row_tokens, eos_id, max_new_tokens)
+                trunc = timed_out or _is_truncated(row_tokens, eos_id, max_new_tokens)
                 all_outputs.append(GenerationResult(
                     text=[text],
                     token_count=n_tok,

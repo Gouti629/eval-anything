@@ -20,11 +20,19 @@ def load_model(model_path: str, device: str = "cuda", dtype: str = "bfloat16"):
             torch_dtype = torch.float16
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    attn_impl = None
+    try:
+        import flash_attn  # noqa: F401
+        attn_impl = "flash_attention_2"
+    except ImportError:
+        pass
+
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
         torch_dtype=torch_dtype,
         device_map=device,
         trust_remote_code=True,
+        **({"attn_implementation": attn_impl} if attn_impl else {}),
     )
     model.eval()
     if tokenizer.pad_token is None:

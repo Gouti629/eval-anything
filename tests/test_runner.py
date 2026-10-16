@@ -143,35 +143,31 @@ class TestResumeByExampleId:
         assert hash1 == hash2
 
 
-class TestTimeoutSafety:
-    """Generation timeout must not allow overlapping model.generate() calls."""
+class TestTimeBudget:
+    """TimeBudget stopping criteria for generation timeout."""
 
-    def test_wait_for_pending_clears_finished_thread(self):
-        from eval_harness.utils.generation import _wait_for_pending, _pending_lock, _pending_thread
-        import eval_harness.utils.generation as gen_mod
-        import threading
+    def test_not_expired_before_deadline(self):
+        from eval_harness.utils.generation import TimeBudget
+        timer = TimeBudget(seconds=60)
+        assert timer(input_ids=None, scores=None) is False
+        assert timer.expired is False
 
-        finished = threading.Thread(target=lambda: None)
-        finished.start()
-        finished.join()
-        with gen_mod._pending_lock:
-            gen_mod._pending_thread = finished
-        gen_mod._wait_for_pending()
-        assert gen_mod._pending_thread is None
+    def test_expired_after_deadline(self):
+        from eval_harness.utils.generation import TimeBudget
+        timer = TimeBudget(seconds=0)
+        import time
+        time.sleep(0.01)
+        assert timer(input_ids=None, scores=None) is True
+        assert timer.expired is True
 
-    def test_wait_for_pending_blocks_on_alive_thread(self):
-        import eval_harness.utils.generation as gen_mod
-        import threading
-
-        event = threading.Event()
-        slow_thread = threading.Thread(target=lambda: event.wait(timeout=5))
-        slow_thread.start()
-        with gen_mod._pending_lock:
-            gen_mod._pending_thread = slow_thread
-        event.set()
-        gen_mod._wait_for_pending()
-        assert not slow_thread.is_alive()
-        assert gen_mod._pending_thread is None
+    def test_expired_flag_persists(self):
+        from eval_harness.utils.generation import TimeBudget
+        timer = TimeBudget(seconds=0)
+        import time
+        time.sleep(0.01)
+        timer(input_ids=None, scores=None)
+        assert timer.expired is True
+        assert timer(input_ids=None, scores=None) is True
 
 
 class TestGenerationResult:
