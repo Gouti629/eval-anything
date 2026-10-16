@@ -154,17 +154,15 @@ class TestTimeBudget:
 
     def test_expired_after_deadline(self):
         from eval_harness.utils.generation import TimeBudget
-        timer = TimeBudget(seconds=0)
-        import time
-        time.sleep(0.01)
+        timer = TimeBudget(seconds=60)
+        timer.deadline = 0
         assert timer(input_ids=None, scores=None) is True
         assert timer.expired is True
 
     def test_expired_flag_persists(self):
         from eval_harness.utils.generation import TimeBudget
-        timer = TimeBudget(seconds=0)
-        import time
-        time.sleep(0.01)
+        timer = TimeBudget(seconds=60)
+        timer.deadline = 0
         timer(input_ids=None, scores=None)
         assert timer.expired is True
         assert timer(input_ids=None, scores=None) is True
