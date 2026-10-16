@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+fast = ["flash-attn>=2.5"]
 test = ["pytest>=7.0"]
 
 [project.scripts]
