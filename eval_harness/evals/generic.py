@@ -16,6 +16,38 @@ _VALID_SCORERS = set(SCORERS.keys())
 _VALID_FORMATTERS = {"plain", "multiple_choice", "code_completion"}
 
 
+def _transform_livecodebench_tests(raw_value) -> list[str]:
+    if isinstance(raw_value, str):
+        data = json.loads(raw_value)
+    else:
+        data = raw_value
+    test_cases = data if isinstance(data, list) else data.get("test_cases", [])
+    assertions = []
+    for tc in test_cases:
+        inp = tc["input"]
+        out = tc["output"]
+        if tc.get("testtype") == "stdin":
+            assertions.append(
+                "import sys, io as _io\n"
+                f"sys.stdin = _io.StringIO({inp!r})\n"
+                f"_capture = _io.StringIO()\n"
+                f"sys.stdout = _capture\n"
+                f"main()\n"
+                f"sys.stdout = sys.__stdout__\n"
+                f"sys.stdin = sys.__stdin__\n"
+                f"assert _capture.getvalue().strip() == {out!r}.strip()"
+            )
+        else:
+            func_name = tc.get("func_name", "solution")
+            assertions.append(f"assert {func_name}({inp}) == {out}")
+    return assertions
+
+
+_ANSWER_TRANSFORMS: dict[str, callable] = {
+    "livecodebench_tests": _transform_livecodebench_tests,
+}
+
+
 class ConfigError(ValueError):
     pass
 
@@ -101,6 +133,9 @@ def validate_config(config: dict) -> list[str]:
         errors.append(f"Unknown formatter {formatter!r}. Valid: {sorted(_VALID_FORMATTERS)}")
     if config.get("formatter") == "multiple_choice" and not config.get("choices_field"):
         errors.append("multiple_choice formatter requires choices_field")
+    transform = config.get("answer_transform")
+    if transform is not None and transform not in _ANSWER_TRANSFORMS:
+        errors.append(f"Unknown answer_transform {transform!r}. Valid: {sorted(_ANSWER_TRANSFORMS)}")
     return errors
 
 
@@ -118,6 +153,7 @@ def config_fingerprint(config: dict, gen_params: dict) -> str:
         "delimiter": config.get("delimiter"),
         "prepend_prompt": config.get("prepend_prompt", False),
         "system_prompt": config.get("system_prompt", ""),
+        "answer_transform": config.get("answer_transform"),
         "max_new_tokens_override": config.get("max_new_tokens"),
         **gen_params,
     }, sort_keys=True)
@@ -143,6 +179,7 @@ class GenericEval:
         self.delimiter = config.get("delimiter", None)
         self.choices_field = config.get("choices_field", None)
         self.prepend_prompt = config.get("prepend_prompt", False)
+        self.answer_transform = config.get("answer_transform", None)
         self.max_new_tokens = config.get("max_new_tokens", None)
         self.think = think
         self._scorer_fn = SCORERS[self.scorer_name]
@@ -198,6 +235,9 @@ class GenericEval:
                 f"Dataset {self.dataset_name} row {idx}: field extraction failed: {e}. "
                 f"Available fields: {list(raw.keys())}"
             ) from e
+
+        if self.answer_transform:
+            answer = _ANSWER_TRANSFORMS[self.answer_transform](answer)
 
         if self.formatter_name == "multiple_choice" and self.choices_field:
             choices_raw = self._get_field(raw, self.choices_field)

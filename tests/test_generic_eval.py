@@ -1,7 +1,12 @@
 """Tests for GenericEval — config validation, ARC normalization, scoring dispatch, safe filter."""
+import json
+
 import pytest
 
-from eval_harness.evals.generic import GenericEval, validate_config, config_fingerprint, ConfigError, _safe_eval_filter
+from eval_harness.evals.generic import (
+    GenericEval, validate_config, config_fingerprint, ConfigError,
+    _safe_eval_filter, _transform_livecodebench_tests,
+)
 
 
 class TestValidateConfig:
@@ -235,6 +240,106 @@ class TestSafeFilter:
     def test_syntax_error_raises(self):
         with pytest.raises(ConfigError, match="Invalid filter"):
             _safe_eval_filter("x >>> 5", {"x": 1})
+
+
+class TestAnswerTransformValidation:
+    def test_valid_transform_accepted(self):
+        cfg = {
+            "name": "test", "dataset": "d", "question_field": "q",
+            "answer_field": "a", "answer_transform": "livecodebench_tests",
+            "scorer": "code_exec", "formatter": "code_completion",
+        }
+        assert validate_config(cfg) == []
+
+    def test_unknown_transform_rejected(self):
+        cfg = {
+            "name": "test", "dataset": "d", "question_field": "q",
+            "answer_field": "a", "answer_transform": "nonexistent",
+        }
+        errors = validate_config(cfg)
+        assert any("Unknown answer_transform" in e for e in errors)
+
+    def test_transform_changes_fingerprint(self):
+        gen = {"batch_size": 8}
+        cfg1 = {"dataset": "d", "answer_transform": None}
+        cfg2 = {"dataset": "d", "answer_transform": "livecodebench_tests"}
+        assert config_fingerprint(cfg1, gen) != config_fingerprint(cfg2, gen)
+
+
+class TestLiveCodeBenchTransform:
+    def test_func_name_style(self):
+        verification = json.dumps({
+            "test_cases": [
+                {"input": "[1, 2, 3]", "output": "6", "func_name": "sum_list"},
+            ]
+        })
+        result = _transform_livecodebench_tests(verification)
+        assert len(result) == 1
+        assert result[0] == "assert sum_list([1, 2, 3]) == 6"
+
+    def test_default_func_name(self):
+        verification = json.dumps({
+            "test_cases": [
+                {"input": "5", "output": "25"},
+            ]
+        })
+        result = _transform_livecodebench_tests(verification)
+        assert result[0] == "assert solution(5) == 25"
+
+    def test_stdin_style(self):
+        verification = json.dumps({
+            "test_cases": [
+                {"input": "hello", "output": "HELLO", "testtype": "stdin"},
+            ]
+        })
+        result = _transform_livecodebench_tests(verification)
+        assert len(result) == 1
+        code = result[0]
+        assert "sys.stdin" in code
+        assert "main()" in code
+        assert "HELLO" in code
+
+    def test_multiple_cases(self):
+        verification = json.dumps({
+            "test_cases": [
+                {"input": "1", "output": "1", "func_name": "f"},
+                {"input": "2", "output": "4", "func_name": "f"},
+            ]
+        })
+        result = _transform_livecodebench_tests(verification)
+        assert len(result) == 2
+
+    def test_dict_input_without_wrapper(self):
+        verification = json.dumps([
+            {"input": "3", "output": "9", "func_name": "sq"},
+        ])
+        result = _transform_livecodebench_tests(verification)
+        assert result[0] == "assert sq(3) == 9"
+
+    def test_output_is_valid_python(self):
+        verification = json.dumps({
+            "test_cases": [
+                {"input": "[1, 2]", "output": "3", "func_name": "add"},
+            ]
+        })
+        result = _transform_livecodebench_tests(verification)
+        for line in result:
+            compile(line, "<test>", "exec")
+
+    def test_normalize_row_applies_transform(self):
+        cfg = {
+            "name": "lcb", "dataset": "d", "question_field": "q",
+            "answer_field": "a", "answer_transform": "livecodebench_tests",
+            "scorer": "code_exec", "formatter": "code_completion",
+        }
+        ev = GenericEval(cfg)
+        verification = json.dumps({
+            "test_cases": [{"input": "1", "output": "2", "func_name": "f"}]
+        })
+        row = {"q": "Write f", "a": verification}
+        entry = ev._normalize_row(row, 0)
+        assert isinstance(entry["ground_truth"], list)
+        assert entry["ground_truth"][0] == "assert f(1) == 2"
 
 
 class TestExampleId:

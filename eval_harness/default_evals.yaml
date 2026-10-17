@@ -37,6 +37,16 @@
   formatter: code_completion
   prepend_prompt: true
 
+- name: livecodebench_v5
+  dataset: PrimeIntellect/LiveCodeBench-v5
+  split: train
+  question_field: prompt
+  answer_field: verification_info
+  answer_transform: livecodebench_tests
+  system_prompt: "You are an expert Python programmer. Write a complete solution. Only output the code, no explanation."
+  scorer: code_exec
+  formatter: code_completion
+
 - name: arc
   dataset: allenai/ai2_arc
   config: ['ARC-Challenge']

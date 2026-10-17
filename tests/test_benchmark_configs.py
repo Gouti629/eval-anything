@@ -18,17 +18,17 @@ def _load_default_configs():
 
 
 class TestDefaultConfigsValid:
-    """All 5 default benchmark configs should pass validation."""
+    """All default benchmark configs should pass validation."""
 
     def test_all_configs_load(self):
         configs = _load_default_configs()
-        assert len(configs) == 5
+        assert len(configs) == 6
 
-    @pytest.mark.parametrize("idx", range(5))
+    @pytest.mark.parametrize("idx", range(6))
     def test_config_creates_eval(self, idx):
         configs = _load_default_configs()
         ev = GenericEval(configs[idx])
-        assert ev.name in ("gsm8k", "math", "mbpp", "humaneval", "arc")
+        assert ev.name in ("gsm8k", "math", "mbpp", "humaneval", "livecodebench_v5", "arc")
 
 
 class TestGSM8KRowShape:
