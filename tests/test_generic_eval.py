@@ -5,7 +5,7 @@ import pytest
 
 from eval_harness.evals.generic import (
     GenericEval, validate_config, config_fingerprint, ConfigError,
-    _safe_eval_filter, _transform_livecodebench_tests,
+    _safe_eval_filter, _transform_livecodebench_tests, _extract_func_name,
 )
 
 
@@ -340,6 +340,73 @@ class TestLiveCodeBenchTransform:
         entry = ev._normalize_row(row, 0)
         assert isinstance(entry["ground_truth"], list)
         assert entry["ground_truth"][0] == "assert f(1) == 2"
+
+
+class TestExtractFuncName:
+    def test_from_assert_list(self):
+        gt = ["assert remove_dirty_chars('abc', 'a') == 'bc'"]
+        assert _extract_func_name(gt) == "remove_dirty_chars"
+
+    def test_from_string(self):
+        assert _extract_func_name("assert f(1) == 2") == "f"
+
+    def test_no_assert_returns_none(self):
+        assert _extract_func_name("print('hello')") is None
+
+    def test_empty_list(self):
+        assert _extract_func_name([]) is None
+
+    def test_first_match_wins(self):
+        gt = ["assert add(1,2) == 3", "assert add(0,0) == 0"]
+        assert _extract_func_name(gt) == "add"
+
+
+class TestCodeCompletionFuncNamePrompt:
+    def _make_eval(self, **extra):
+        cfg = {
+            "name": "test", "dataset": "d", "question_field": "q",
+            "answer_field": "a", "scorer": "code_exec",
+            "formatter": "code_completion",
+            "system_prompt": "Write a Python function.",
+            **extra,
+        }
+        return GenericEval(cfg)
+
+    def _dummy_tokenizer(self):
+        class Tok:
+            def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+                return "\n".join(m["content"] for m in messages) + "\nassistant:"
+        return Tok()
+
+    def test_func_name_appended_to_prompt(self):
+        ev = self._make_eval()
+        example = {
+            "question": "Write a function to add two numbers.",
+            "ground_truth": ["assert add(1, 2) == 3"],
+            "_raw": {},
+        }
+        prompt = ev.format_prompt(example, self._dummy_tokenizer())
+        assert "`add`" in prompt
+
+    def test_no_func_name_when_prepend_prompt(self):
+        ev = self._make_eval(prepend_prompt=True)
+        example = {
+            "question": "def add(a, b):",
+            "ground_truth": ["assert add(1, 2) == 3"],
+            "_raw": {},
+        }
+        prompt = ev.format_prompt(example, self._dummy_tokenizer())
+        assert "should be named" not in prompt
+
+    def test_no_func_name_when_not_extractable(self):
+        ev = self._make_eval()
+        example = {
+            "question": "Write something.",
+            "ground_truth": "print('hello')",
+            "_raw": {},
+        }
+        prompt = ev.format_prompt(example, self._dummy_tokenizer())
+        assert "should be named" not in prompt
 
 
 class TestExampleId:

@@ -14,6 +14,16 @@ from eval_harness.rewards.scorers import SCORERS, _strip_think
 _REQUIRED_FIELDS = {"name", "dataset", "question_field", "answer_field"}
 _VALID_SCORERS = set(SCORERS.keys())
 _VALID_FORMATTERS = {"plain", "multiple_choice", "code_completion"}
+_FUNC_NAME_RE = re.compile(r"assert\s+(\w+)\s*\(")
+
+
+def _extract_func_name(ground_truth) -> str | None:
+    tests = ground_truth if isinstance(ground_truth, list) else [str(ground_truth)]
+    for t in tests:
+        m = _FUNC_NAME_RE.search(t)
+        if m:
+            return m.group(1)
+    return None
 
 
 def _transform_livecodebench_tests(raw_value) -> list[str]:
@@ -281,6 +291,10 @@ class GenericEval:
             if choices:
                 choice_text = "\n".join(f"{label}. {text}" for label, text in choices)
                 question = question + "\n\n" + choice_text
+        elif self.formatter_name == "code_completion" and not self.prepend_prompt:
+            func_name = _extract_func_name(example.get("ground_truth"))
+            if func_name:
+                question = f"{question}\n\nThe function should be named `{func_name}`."
 
         messages = []
         if self.system_prompt:
