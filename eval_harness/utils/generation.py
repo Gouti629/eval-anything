@@ -67,6 +67,9 @@ def batched_generate(
 
     eos_id = tokenizer.eos_token_id
 
+    ctx_len = getattr(model.config, "max_position_embeddings", None)
+    tok_max_len = ctx_len - max_new_tokens if ctx_len else None
+
     for i in range(0, len(prompts), batch_size):
         batch_prompts = prompts[i : i + batch_size]
         encoded = tokenizer(
@@ -74,6 +77,7 @@ def batched_generate(
             return_tensors="pt",
             padding=True,
             truncation=True,
+            **({"max_length": tok_max_len} if tok_max_len else {}),
         ).to(model.device)
 
         timer = TimeBudget(timeout)

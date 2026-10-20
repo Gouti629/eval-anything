@@ -35,6 +35,10 @@ def load_model(model_path: str, device: str = "cuda", dtype: str = "bfloat16"):
         **({"attn_implementation": attn_impl} if attn_impl else {}),
     )
     model.eval()
+    try:
+        model = torch.compile(model)
+    except Exception:
+        pass
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"

@@ -8,6 +8,7 @@ import platform
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import torch
@@ -232,13 +233,9 @@ def evaluate(
                 num_samples = pass_k if use_pass_k else 1
                 sample_temp = temperature if temperature > 0 else (0.8 if use_pass_k else 0.0)
 
-                total_score = 0.0
-                correct = 0
-                incorrect = 0
-                timed_out = 0
-                oom_count = 0
-                errored = 0
-                truncated_count = 0
+                ctr = {"total_score": 0.0, "correct": 0, "incorrect": 0,
+                       "timed_out": 0, "oom_count": 0, "errored": 0,
+                       "truncated_count": 0}
                 n_done = 0
                 total_gen_tokens = 0
                 total_gen_time = 0.0
@@ -248,18 +245,18 @@ def evaluate(
                     n_done += 1
                     st = existing_ex.get("status", "unknown")
                     if st == "ok":
-                        total_score += existing_ex["score"]
-                        correct += 1
+                        ctr["total_score"] += existing_ex["score"]
+                        ctr["correct"] += 1
                     elif st == "incorrect":
-                        incorrect += 1
+                        ctr["incorrect"] += 1
                     elif st == "timeout":
-                        timed_out += 1
+                        ctr["timed_out"] += 1
                     elif st == "oom":
-                        oom_count += 1
+                        ctr["oom_count"] += 1
                     elif st == "error":
-                        errored += 1
+                        ctr["errored"] += 1
                     else:
-                        errored += 1
+                        ctr["errored"] += 1
 
                 done_ids = {
                     ex["example_id"]
@@ -271,15 +268,34 @@ def evaluate(
                     if ex["example_id"] not in done_ids
                 ]
 
+                sorted_remaining = [
+                    (i, ex, eval_obj.format_prompt(ex, tokenizer))
+                    for i, ex in remaining
+                ]
+                sorted_remaining.sort(key=lambda x: len(x[2]))
+
                 start_time = time.time()
                 pbar = tqdm(total=len(data), initial=n_done, desc=f"    {eval_name}")
 
+                executor = ThreadPoolExecutor(max_workers=1)
+                pending_future = None
+                pending_gen_tokens = 0
+
                 batch_idx = 0
-                while batch_idx < len(remaining):
-                    batch_slice = remaining[batch_idx : batch_idx + current_batch_size]
+                while batch_idx < len(sorted_remaining):
+                    if pending_future is not None:
+                        score_start = time.time()
+                        records = pending_future.result()
+                        total_score_time += time.time() - score_start
+                        _apply_records(records, state, model_key, eval_name, ctr, pbar)
+                        total_gen_tokens += pending_gen_tokens
+                        _save_state_atomic(partial_file, state)
+                        pending_future = None
+
+                    batch_slice = sorted_remaining[batch_idx : batch_idx + current_batch_size]
                     batch_indices = [item[0] for item in batch_slice]
                     batch_examples = [item[1] for item in batch_slice]
-                    prompts = [eval_obj.format_prompt(ex, tokenizer) for ex in batch_examples]
+                    prompts = [item[2] for item in batch_slice]
 
                     gen_start = time.time()
                     try:
@@ -293,8 +309,7 @@ def evaluate(
                             timeout=120,
                             num_return_sequences=num_samples,
                         )
-                        gen_elapsed = time.time() - gen_start
-                        total_gen_time += gen_elapsed
+                        total_gen_time += time.time() - gen_start
                     except TimeoutError:
                         for idx, ex in zip(batch_indices, batch_examples):
                             state["examples"][model_key][eval_name].append({
@@ -308,7 +323,7 @@ def evaluate(
                                 "score": 0.0,
                                 "status": "timeout",
                             })
-                            timed_out += 1
+                            ctr["timed_out"] += 1
                             pbar.update(1)
                         _save_state_atomic(partial_file, state)
                         batch_idx += current_batch_size
@@ -333,105 +348,39 @@ def evaluate(
                                 "score": 0.0,
                                 "status": "oom",
                             })
-                            oom_count += 1
+                            ctr["oom_count"] += 1
                             pbar.update(1)
                         _save_state_atomic(partial_file, state)
                         batch_idx += current_batch_size
                         continue
 
-                    for gen_result in outputs:
-                        total_gen_tokens += gen_result.token_count
-
-                    score_start = time.time()
-                    for j, (idx, ex) in enumerate(zip(batch_indices, batch_examples)):
-                        gen_result = outputs[j]
-                        sample_outputs = gen_result.text
-                        was_truncated = gen_result.truncated
-
-                        try:
-                            if use_pass_k:
-                                sample_results = []
-                                for sample in sample_outputs:
-                                    s, info = eval_obj.score(
-                                        sample, ex["ground_truth"], example=ex
-                                    )
-                                    sample_results.append({
-                                        "output": sample[:1000],
-                                        "score": s,
-                                        "parse_status": info.get("status", "unknown"),
-                                        "parsed": info.get("parsed"),
-                                    })
-                                c = sum(1 for sr in sample_results if sr["score"] >= 1.0)
-                                example_score = pass_at_k(len(sample_results), c, pass_k)
-                                extracted = eval_obj.extract_answer(sample_outputs[0])
-                                parse_status = sample_results[0]["parse_status"]
-                                status = "ok" if example_score > 0 else "incorrect"
-                            else:
-                                output_text = sample_outputs[0]
-                                example_score, info = eval_obj.score(
-                                    output_text, ex["ground_truth"], example=ex
-                                )
-                                extracted = info.get("parsed") or eval_obj.extract_answer(output_text)
-                                parse_status = info.get("status", "unknown")
-                                sample_results = None
-                                status = "ok" if example_score > 0 else "incorrect"
-                        except torch.cuda.OutOfMemoryError:
-                            torch.cuda.empty_cache()
-                            example_score, extracted, parse_status = 0.0, None, "oom"
-                            status = "oom"
-                            sample_results = None
-                            sample_outputs = [None]
-                        except Exception as exc:
-                            example_score, extracted = 0.0, None
-                            parse_status = "error"
-                            status = "error"
-                            sample_results = None
-                            sample_outputs = [None]
-                            error_tb = "".join(traceback.format_exception_only(type(exc), exc))[:500]
-
-                        record = {
-                            "idx": idx,
-                            "example_id": ex["example_id"],
-                            "question": str(ex["question"])[:500],
-                            "ground_truth": _serialize_gt(ex["ground_truth"]),
-                            "model_output": _safe_trunc(sample_outputs[0], 1000),
-                            "extracted": str(extracted)[:500] if extracted else None,
-                            "parse_status": parse_status,
-                            "score": example_score,
-                            "status": status,
-                            "truncated": was_truncated,
-                        }
-                        if sample_results is not None:
-                            record["samples"] = sample_results
-                        if status == "error":
-                            record["error"] = error_tb
-
-                        state["examples"][model_key][eval_name].append(record)
-
-                        if was_truncated:
-                            truncated_count += 1
-                        if status == "ok":
-                            total_score += example_score
-                            correct += 1
-                        elif status == "incorrect":
-                            incorrect += 1
-                        elif status == "timeout":
-                            timed_out += 1
-                        elif status == "oom":
-                            oom_count += 1
-                        else:
-                            errored += 1
-
-                        pbar.update(1)
-
-                    total_score_time += time.time() - score_start
-                    _save_state_atomic(partial_file, state)
+                    pending_gen_tokens = sum(r.token_count for r in outputs)
+                    pending_future = executor.submit(
+                        _score_batch, eval_obj, batch_indices, batch_examples,
+                        outputs, use_pass_k, pass_k,
+                    )
                     batch_idx += current_batch_size
+
+                if pending_future is not None:
+                    score_start = time.time()
+                    records = pending_future.result()
+                    total_score_time += time.time() - score_start
+                    _apply_records(records, state, model_key, eval_name, ctr, pbar)
+                    total_gen_tokens += pending_gen_tokens
+                    _save_state_atomic(partial_file, state)
+                executor.shutdown(wait=False)
 
                 pbar.close()
 
                 elapsed = time.time() - start_time
                 n_total = len(data)
+                correct = ctr["correct"]
+                incorrect = ctr["incorrect"]
+                timed_out = ctr["timed_out"]
+                oom_count = ctr["oom_count"]
+                errored = ctr["errored"]
+                truncated_count = ctr["truncated_count"]
+                total_score = ctr["total_score"]
                 scored_count = correct + incorrect
                 infra_failures = timed_out + oom_count + errored
                 avg_score = total_score / n_total if n_total > 0 else 0.0
@@ -523,3 +472,90 @@ def _safe_trunc(text, limit: int) -> str | None:
     if text is None:
         return None
     return str(text)[:limit]
+
+
+def _score_batch(eval_obj, batch_indices, batch_examples, outputs, use_pass_k, pass_k_val):
+    records = []
+    for j, (idx, ex) in enumerate(zip(batch_indices, batch_examples)):
+        gen_result = outputs[j]
+        sample_outputs = gen_result.text
+        was_truncated = gen_result.truncated
+        sample_results = None
+        error_tb = None
+
+        try:
+            if use_pass_k:
+                sample_results = []
+                for sample in sample_outputs:
+                    s, info = eval_obj.score(sample, ex["ground_truth"], example=ex)
+                    sample_results.append({
+                        "output": sample[:1000],
+                        "score": s,
+                        "parse_status": info.get("status", "unknown"),
+                        "parsed": info.get("parsed"),
+                    })
+                c = sum(1 for sr in sample_results if sr["score"] >= 1.0)
+                example_score = pass_at_k(len(sample_results), c, pass_k_val)
+                extracted = eval_obj.extract_answer(sample_outputs[0])
+                parse_status = sample_results[0]["parse_status"]
+                status = "ok" if example_score > 0 else "incorrect"
+            else:
+                output_text = sample_outputs[0]
+                example_score, info = eval_obj.score(
+                    output_text, ex["ground_truth"], example=ex
+                )
+                extracted = info.get("parsed") or eval_obj.extract_answer(output_text)
+                parse_status = info.get("status", "unknown")
+                status = "ok" if example_score > 0 else "incorrect"
+        except torch.cuda.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            example_score, extracted, parse_status = 0.0, None, "oom"
+            status = "oom"
+            sample_results = None
+            sample_outputs = [None]
+        except Exception as exc:
+            example_score, extracted = 0.0, None
+            parse_status = "error"
+            status = "error"
+            sample_results = None
+            sample_outputs = [None]
+            error_tb = "".join(traceback.format_exception_only(type(exc), exc))[:500]
+
+        record = {
+            "idx": idx,
+            "example_id": ex["example_id"],
+            "question": str(ex["question"])[:500],
+            "ground_truth": _serialize_gt(ex["ground_truth"]),
+            "model_output": _safe_trunc(sample_outputs[0], 1000),
+            "extracted": str(extracted)[:500] if extracted else None,
+            "parse_status": parse_status,
+            "score": example_score,
+            "status": status,
+            "truncated": was_truncated,
+        }
+        if sample_results is not None:
+            record["samples"] = sample_results
+        if error_tb is not None:
+            record["error"] = error_tb
+        records.append(record)
+    return records
+
+
+def _apply_records(records, state, model_key, eval_name, ctr, pbar):
+    for record in records:
+        state["examples"][model_key][eval_name].append(record)
+        s = record["status"]
+        if s == "ok":
+            ctr["total_score"] += record["score"]
+            ctr["correct"] += 1
+        elif s == "incorrect":
+            ctr["incorrect"] += 1
+        elif s == "timeout":
+            ctr["timed_out"] += 1
+        elif s == "oom":
+            ctr["oom_count"] += 1
+        else:
+            ctr["errored"] += 1
+        if record.get("truncated"):
+            ctr["truncated_count"] += 1
+        pbar.update(1)
