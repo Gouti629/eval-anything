@@ -12,7 +12,7 @@ def main():
         "--model",
         action="append",
         required=True,
-        help="HuggingFace model name or local checkpoint path (repeat for multiple)",
+        help="Model name or local checkpoint path (repeat for multiple)",
     )
 
     eval_group = parser.add_argument_group("eval specification (use --eval_config OR inline flags)")

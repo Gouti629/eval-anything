@@ -191,18 +191,18 @@ def evaluate(
     for cfg in eval_configs:
         eval_objects.append(GenericEval(cfg, think=think))
 
-    current_batch_size = batch_size
-
     try:
         for model_path in models:
             model_key = model_path
             print(f"\nLoading model: {model_path}")
-            model, tokenizer = load_model(model_path, device=device)
+            llm, tokenizer = load_model(model_path, device=device)
 
             model_info = state["manifest"].setdefault("model_info", {})
-            model_info[model_key] = {
-                "dtype": str(model.dtype).replace("torch.", ""),
-            }
+            try:
+                dtype_str = str(llm.llm_engine.model_config.dtype).replace("torch.", "")
+            except Exception:
+                dtype_str = "unknown"
+            model_info[model_key] = {"dtype": dtype_str}
 
             if model_key not in state["results"]:
                 state["results"][model_key] = {}
@@ -268,11 +268,10 @@ def evaluate(
                     if ex["example_id"] not in done_ids
                 ]
 
-                sorted_remaining = [
+                remaining_with_prompts = [
                     (i, ex, eval_obj.format_prompt(ex, tokenizer))
                     for i, ex in remaining
                 ]
-                sorted_remaining.sort(key=lambda x: len(x[2]))
 
                 start_time = time.time()
                 pbar = tqdm(total=len(data), initial=n_done, desc=f"    {eval_name}")
@@ -281,8 +280,8 @@ def evaluate(
                 pending_future = None
                 pending_gen_tokens = 0
 
-                batch_idx = 0
-                while batch_idx < len(sorted_remaining):
+                chunk_idx = 0
+                while chunk_idx < len(remaining_with_prompts):
                     if pending_future is not None:
                         score_start = time.time()
                         records = pending_future.result()
@@ -292,25 +291,24 @@ def evaluate(
                         _save_state_atomic(partial_file, state)
                         pending_future = None
 
-                    batch_slice = sorted_remaining[batch_idx : batch_idx + current_batch_size]
-                    batch_indices = [item[0] for item in batch_slice]
-                    batch_examples = [item[1] for item in batch_slice]
-                    prompts = [item[2] for item in batch_slice]
+                    chunk = remaining_with_prompts[chunk_idx : chunk_idx + batch_size]
+                    batch_indices = [item[0] for item in chunk]
+                    batch_examples = [item[1] for item in chunk]
+                    prompts = [item[2] for item in chunk]
 
                     gen_start = time.time()
                     try:
                         outputs = batched_generate(
-                            model,
-                            tokenizer,
+                            llm,
                             prompts,
                             max_new_tokens=eval_max_tokens,
                             temperature=sample_temp,
-                            batch_size=len(prompts),
-                            timeout=120,
                             num_return_sequences=num_samples,
                         )
                         total_gen_time += time.time() - gen_start
-                    except TimeoutError:
+                    except Exception as e:
+                        total_gen_time += time.time() - gen_start
+                        print(f"\n    Generation error: {e}")
                         for idx, ex in zip(batch_indices, batch_examples):
                             state["examples"][model_key][eval_name].append({
                                 "idx": idx,
@@ -319,39 +317,14 @@ def evaluate(
                                 "ground_truth": _serialize_gt(ex["ground_truth"]),
                                 "model_output": None,
                                 "extracted": None,
-                                "parse_status": "timeout",
+                                "parse_status": "error",
                                 "score": 0.0,
-                                "status": "timeout",
+                                "status": "error",
                             })
-                            ctr["timed_out"] += 1
+                            ctr["errored"] += 1
                             pbar.update(1)
                         _save_state_atomic(partial_file, state)
-                        batch_idx += current_batch_size
-                        continue
-                    except torch.cuda.OutOfMemoryError:
-                        torch.cuda.empty_cache()
-                        if current_batch_size > 1:
-                            new_bs = max(1, current_batch_size // 2)
-                            print(f"\n    OOM with batch_size={current_batch_size}, "
-                                  f"reducing to {new_bs}")
-                            current_batch_size = new_bs
-                            continue
-                        for idx, ex in zip(batch_indices, batch_examples):
-                            state["examples"][model_key][eval_name].append({
-                                "idx": idx,
-                                "example_id": ex["example_id"],
-                                "question": str(ex["question"])[:500],
-                                "ground_truth": _serialize_gt(ex["ground_truth"]),
-                                "model_output": None,
-                                "extracted": None,
-                                "parse_status": "oom",
-                                "score": 0.0,
-                                "status": "oom",
-                            })
-                            ctr["oom_count"] += 1
-                            pbar.update(1)
-                        _save_state_atomic(partial_file, state)
-                        batch_idx += current_batch_size
+                        chunk_idx += batch_size
                         continue
 
                     pending_gen_tokens = sum(r.token_count for r in outputs)
@@ -359,7 +332,7 @@ def evaluate(
                         _score_batch, eval_obj, batch_indices, batch_examples,
                         outputs, use_pass_k, pass_k,
                     )
-                    batch_idx += current_batch_size
+                    chunk_idx += batch_size
 
                 if pending_future is not None:
                     score_start = time.time()
@@ -413,8 +386,7 @@ def evaluate(
                     "generated_tokens": total_gen_tokens,
                     "tokens_per_second": round(gen_tok_per_sec, 1),
                     "examples_per_second": round(n_total / elapsed, 2) if elapsed > 0 else 0,
-                    "requested_batch_size": batch_size,
-                    "effective_batch_size": current_batch_size,
+                    "batch_size": batch_size,
                 }
 
                 infra_msg = ""
@@ -425,12 +397,10 @@ def evaluate(
 
                 _save_state_atomic(partial_file, state)
 
-            del model
+            del llm
             del tokenizer
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-
-            current_batch_size = batch_size
 
     except KeyboardInterrupt:
         print("\nInterrupted. Saving partial results...")

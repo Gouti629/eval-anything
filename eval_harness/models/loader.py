@@ -1,45 +1,25 @@
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-
 _DTYPE_MAP = {
-    "bfloat16": torch.bfloat16,
-    "float16": torch.float16,
-    "float32": torch.float32,
+    "bfloat16": "bfloat16",
+    "float16": "float16",
+    "float32": "float32",
+    "auto": "auto",
 }
 
 
 def load_model(model_path: str, device: str = "cuda", dtype: str = "bfloat16"):
-    torch_dtype = _DTYPE_MAP.get(dtype)
-    if torch_dtype is None:
+    from vllm import LLM
+
+    if not device.startswith("cuda"):
+        raise ValueError(f"vLLM requires a CUDA device, got {device!r}")
+
+    vllm_dtype = _DTYPE_MAP.get(dtype)
+    if vllm_dtype is None:
         raise ValueError(f"Unsupported dtype {dtype!r}. Use: {list(_DTYPE_MAP.keys())}")
 
-    if torch_dtype == torch.bfloat16 and device != "cpu":
-        if torch.cuda.is_available() and not torch.cuda.is_bf16_supported():
-            print(f"Warning: bfloat16 not supported on this GPU, falling back to float16")
-            torch_dtype = torch.float16
-
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    attn_impl = None
-    try:
-        import flash_attn  # noqa: F401
-        attn_impl = "flash_attention_2"
-    except ImportError:
-        pass
-
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        torch_dtype=torch_dtype,
-        device_map=device,
+    llm = LLM(
+        model=model_path,
+        dtype=vllm_dtype,
         trust_remote_code=True,
-        **({"attn_implementation": attn_impl} if attn_impl else {}),
     )
-    model.eval()
-    try:
-        model = torch.compile(model)
-    except Exception:
-        pass
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.padding_side = "left"
-    return model, tokenizer
+    tokenizer = llm.get_tokenizer()
+    return llm, tokenizer

@@ -143,31 +143,6 @@ class TestResumeByExampleId:
         assert hash1 == hash2
 
 
-class TestTimeBudget:
-    """TimeBudget stopping criteria for generation timeout."""
-
-    def test_not_expired_before_deadline(self):
-        from eval_harness.utils.generation import TimeBudget
-        timer = TimeBudget(seconds=60)
-        assert timer(input_ids=None, scores=None) is False
-        assert timer.expired is False
-
-    def test_expired_after_deadline(self):
-        from eval_harness.utils.generation import TimeBudget
-        timer = TimeBudget(seconds=60)
-        timer.deadline = 0
-        assert timer(input_ids=None, scores=None) is True
-        assert timer.expired is True
-
-    def test_expired_flag_persists(self):
-        from eval_harness.utils.generation import TimeBudget
-        timer = TimeBudget(seconds=60)
-        timer.deadline = 0
-        timer(input_ids=None, scores=None)
-        assert timer.expired is True
-        assert timer(input_ids=None, scores=None) is True
-
-
 class TestGenerationResult:
     """GenerationResult carries token count and truncation flag."""
 
@@ -182,26 +157,6 @@ class TestGenerationResult:
         from eval_harness.utils.generation import GenerationResult
         r = GenerationResult(text=["hi"], token_count=512, truncated=True)
         assert r.truncated is True
-
-
-class TestTruncationDetection:
-    def test_not_truncated_when_short(self):
-        import torch
-        from eval_harness.utils.generation import _is_truncated
-        tokens = torch.tensor([1, 2, 3])
-        assert _is_truncated(tokens, eos_token_id=99, max_new_tokens=512) is False
-
-    def test_truncated_at_max_no_eos(self):
-        import torch
-        from eval_harness.utils.generation import _is_truncated
-        tokens = torch.tensor([1, 2, 3, 4])
-        assert _is_truncated(tokens, eos_token_id=99, max_new_tokens=4) is True
-
-    def test_not_truncated_at_max_with_eos(self):
-        import torch
-        from eval_harness.utils.generation import _is_truncated
-        tokens = torch.tensor([1, 2, 3, 99])
-        assert _is_truncated(tokens, eos_token_id=99, max_new_tokens=4) is False
 
 
 class TestPerEvalMaxNewTokens:
