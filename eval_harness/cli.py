@@ -49,8 +49,10 @@ def main():
 
     parser.add_argument("--comment", type=str, default=None, help="Free-text comment for logging")
     parser.add_argument("--output", type=str, default="./results", help="Results directory")
-    parser.add_argument("--batch_size", type=int, default=8, help="Inference batch size (default: 8)")
-    parser.add_argument("--max_new_tokens", type=int, default=512, help="Generation token limit")
+    parser.add_argument("--batch_size", type=str, default="8",
+                        help="Inference batch size, or 'auto' to fill GPU memory (default: 8)")
+    parser.add_argument("--max_new_tokens", type=str, default="512",
+                        help="Generation token limit, or 'auto' to fill GPU memory (default: 512)")
     parser.add_argument("--temperature", type=float, default=0.0, help="Generation temperature (0.0 = greedy)")
     parser.add_argument("--pass_k", type=int, default=None, help="Number of samples for pass@k (code evals only)")
     parser.add_argument("--device", type=str, default="cuda", help="Device for inference")
@@ -81,6 +83,9 @@ def main():
     if args.pass_k is not None and temperature == 0.0:
         temperature = 0.8
 
+    batch_size = None if args.batch_size == "auto" else int(args.batch_size)
+    max_new_tokens = None if args.max_new_tokens == "auto" else int(args.max_new_tokens)
+
     eval_configs = _resolve_eval_configs(args)
     if not eval_configs:
         parser.error("specify --eval_config or --dataset with --question_field and --answer_field")
@@ -90,8 +95,8 @@ def main():
         eval_configs=eval_configs,
         comment=args.comment,
         output_dir=args.output,
-        batch_size=args.batch_size,
-        max_new_tokens=args.max_new_tokens,
+        batch_size=batch_size,
+        max_new_tokens=max_new_tokens,
         temperature=temperature,
         pass_k=args.pass_k,
         device=args.device,

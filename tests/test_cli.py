@@ -54,9 +54,23 @@ class TestCliParsing:
     def test_default_batch_size_is_8(self):
         import argparse
         parser = argparse.ArgumentParser()
-        parser.add_argument("--batch_size", type=int, default=8)
+        parser.add_argument("--batch_size", type=str, default="8")
         args = parser.parse_args([])
-        assert args.batch_size == 8
+        assert args.batch_size == "8"
+
+    def test_batch_size_auto(self):
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--batch_size", type=str, default="8")
+        args = parser.parse_args(["--batch_size", "auto"])
+        assert args.batch_size == "auto"
+
+    def test_max_new_tokens_auto(self):
+        import argparse
+        parser = argparse.ArgumentParser()
+        parser.add_argument("--max_new_tokens", type=str, default="512")
+        args = parser.parse_args(["--max_new_tokens", "auto"])
+        assert args.max_new_tokens == "auto"
 
 
 class TestBackendFlag:

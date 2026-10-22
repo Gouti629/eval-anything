@@ -25,6 +25,12 @@ eval-anything --model Qwen/Qwen2.5-0.5B \
   --question_field question --answer_field answer \
   --scorer number_extract --delimiter "####"
 
+# Auto-tune: given batch size, maximize token length from GPU memory
+eval-anything --model Qwen/Qwen2.5-7B --eval_config default --batch_size 32 --max_new_tokens auto
+
+# Auto-tune: given token length, maximize batch size from GPU memory
+eval-anything --model Qwen/Qwen2.5-7B --eval_config default --max_new_tokens 2048 --batch_size auto
+
 # Multi-GPU with tensor parallelism
 eval-anything --model meta-llama/Llama-3-70B --eval_config default --tensor_parallel 4
 
@@ -89,8 +95,8 @@ for name, r in results.items():
 | `--model` | (required) | Model name or path. Repeat for multiple. |
 | `--backend` | `vllm` | `vllm` (GPU) or `hf` (CPU/Mac/CUDA). |
 | `--device` | `cuda` | Inference device. |
-| `--batch_size` | `8` | Batch/chunk size. |
-| `--max_new_tokens` | `512` | Generation token limit. |
+| `--batch_size` | `8` | Batch size, or `auto` to maximize from GPU memory. |
+| `--max_new_tokens` | `512` | Token limit, or `auto` to maximize from GPU memory. |
 | `--temperature` | `0.0` | Sampling temperature. 0 = greedy. |
 | `--tensor_parallel` | `1` | Number of GPUs for tensor parallelism (vLLM only). |
 | `--think` | off | Keep `<think>` token for reasoning models. |

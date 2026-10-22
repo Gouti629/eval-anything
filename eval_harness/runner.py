@@ -175,8 +175,8 @@ def evaluate(
     eval_configs: list[dict],
     comment: str | None = None,
     output_dir: str = "./results",
-    batch_size: int = 8,
-    max_new_tokens: int = 512,
+    batch_size: int | None = 8,
+    max_new_tokens: int | None = 512,
     temperature: float = 0.0,
     pass_k: int | None = None,
     device: str = "cuda",
@@ -190,9 +190,9 @@ def evaluate(
         if errors:
             raise ValueError(f"Invalid eval config {cfg.get('name', '?')}: {'; '.join(errors)}")
 
-    if batch_size < 1:
+    if batch_size is not None and batch_size < 1:
         raise ValueError(f"batch_size must be >= 1, got {batch_size}")
-    if max_new_tokens < 1:
+    if max_new_tokens is not None and max_new_tokens < 1:
         raise ValueError(f"max_new_tokens must be >= 1, got {max_new_tokens}")
     if pass_k is not None and pass_k < 1:
         raise ValueError(f"pass_k must be >= 1, got {pass_k}")
@@ -201,6 +201,13 @@ def evaluate(
 
     os.makedirs(output_dir, exist_ok=True)
 
+    auto_batch = batch_size is None
+    auto_tokens = max_new_tokens is None
+    if batch_size is None:
+        batch_size = 8
+    if max_new_tokens is None:
+        max_new_tokens = 512
+
     gen_params = {
         "batch_size": batch_size,
         "max_new_tokens": max_new_tokens,
@@ -208,6 +215,8 @@ def evaluate(
         "pass_k": pass_k,
         "limit": limit,
         "backend": backend,
+        "auto_batch": auto_batch,
+        "auto_tokens": auto_tokens,
     }
 
     fingerprint = _run_fingerprint(models, eval_configs, gen_params, think=think)
@@ -247,6 +256,14 @@ def evaluate(
             else:
                 llm, tokenizer = load_model(model_path, device=device,
                                             tensor_parallel_size=tensor_parallel_size)
+
+            if auto_batch or auto_tokens:
+                from eval_harness.utils.auto_tune import auto_tune_params
+                batch_size, max_new_tokens = auto_tune_params(
+                    llm, backend,
+                    batch_size=None if auto_batch else batch_size,
+                    max_new_tokens=None if auto_tokens else max_new_tokens,
+                )
 
             generate_fn = _make_generate_fn(backend, llm, tokenizer)
 
@@ -604,8 +621,8 @@ def quick_eval(
     tokenizer=None,
     eval_configs: str | list[dict] = "default",
     limit: int | None = 50,
-    batch_size: int = 8,
-    max_new_tokens: int = 512,
+    batch_size: int | None = 8,
+    max_new_tokens: int | None = 512,
     temperature: float = 0.0,
     pass_k: int | None = None,
     think: bool = False,
@@ -637,6 +654,12 @@ def quick_eval(
 
     if limit is not None and limit < 1:
         raise ValueError(f"limit must be >= 1, got {limit}")
+
+    if batch_size is None or max_new_tokens is None:
+        from eval_harness.utils.auto_tune import auto_tune_params
+        batch_size, max_new_tokens = auto_tune_params(
+            model, backend, batch_size=batch_size, max_new_tokens=max_new_tokens,
+        )
 
     generate_fn = _make_generate_fn(backend, model, tokenizer)
 
