@@ -165,6 +165,9 @@ def config_fingerprint(config: dict, gen_params: dict) -> str:
         "system_prompt": config.get("system_prompt", ""),
         "answer_transform": config.get("answer_transform"),
         "max_new_tokens_override": config.get("max_new_tokens"),
+        "few_shot": config.get("few_shot"),
+        "few_shot_split": config.get("few_shot_split", "train"),
+        "few_shot_seed": config.get("few_shot_seed", 42),
         **gen_params,
     }, sort_keys=True)
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
@@ -191,8 +194,12 @@ class GenericEval:
         self.prepend_prompt = config.get("prepend_prompt", False)
         self.answer_transform = config.get("answer_transform", None)
         self.max_new_tokens = config.get("max_new_tokens", None)
+        self.few_shot = config.get("few_shot", None)
+        self.few_shot_split = config.get("few_shot_split", "train")
+        self.few_shot_seed = config.get("few_shot_seed", 42)
         self.think = think
         self._scorer_fn = SCORERS[self.scorer_name]
+        self._few_shot_examples: list[dict] | None = None
 
     @property
     def is_code_eval(self) -> bool:
@@ -283,6 +290,56 @@ class GenericEval:
             return val
         return row[field]
 
+    def _get_few_shot_examples(self) -> list[dict]:
+        if self._few_shot_examples is not None:
+            return self._few_shot_examples
+
+        if self.few_shot is None or self.few_shot <= 0:
+            self._few_shot_examples = []
+            return self._few_shot_examples
+
+        import random
+
+        kwargs = {"split": self.few_shot_split}
+        configs = self.dataset_config
+        if configs is None:
+            configs = [None]
+        elif isinstance(configs, str):
+            configs = [configs]
+
+        if configs[0] is not None:
+            ds = load_dataset(self.dataset_name, configs[0], **kwargs)
+        else:
+            ds = load_dataset(self.dataset_name, **kwargs)
+
+        rng = random.Random(self.few_shot_seed)
+        n = min(self.few_shot, len(ds))
+        indices = rng.sample(range(len(ds)), n)
+
+        examples = []
+        for i in indices:
+            raw = dict(ds[i])
+            q = str(self._get_field(raw, self.question_field))
+            a = str(self._get_field(raw, self.answer_field))
+
+            if self.formatter_name == "multiple_choice" and self.choices_field:
+                choices_raw = self._get_field(raw, self.choices_field)
+                if isinstance(choices_raw, dict) and "label" in choices_raw and "text" in choices_raw:
+                    choices = list(zip(choices_raw["label"], choices_raw["text"]))
+                elif isinstance(choices_raw, list):
+                    labels = "ABCDEFGHIJKLMNOP"
+                    choices = [(labels[j], c) for j, c in enumerate(choices_raw)]
+                else:
+                    choices = []
+                if choices:
+                    choice_text = "\n".join(f"{lb}. {tx}" for lb, tx in choices)
+                    q = q + "\n\n" + choice_text
+
+            examples.append({"question": q, "answer": a})
+
+        self._few_shot_examples = examples
+        return self._few_shot_examples
+
     def format_prompt(self, example: dict, tokenizer) -> str:
         question = str(example["question"])
 
@@ -299,6 +356,11 @@ class GenericEval:
         messages = []
         if self.system_prompt:
             messages.append({"role": "system", "content": self.system_prompt})
+
+        for fs_ex in self._get_few_shot_examples():
+            messages.append({"role": "user", "content": fs_ex["question"]})
+            messages.append({"role": "assistant", "content": fs_ex["answer"]})
+
         messages.append({"role": "user", "content": question})
 
         try:

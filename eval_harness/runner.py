@@ -74,7 +74,7 @@ def _is_example_done(state: dict, model_key: str, eval_name: str, example_id: st
     return any(ex.get("example_id") == example_id for ex in eval_examples)
 
 
-def _build_manifest(models, eval_configs, gen_params, device, think):
+def _build_manifest(models, eval_configs, gen_params, device, think, backend="vllm"):
     gpu_name = None
     if device.startswith("cuda") and torch.cuda.is_available():
         idx = 0
@@ -92,6 +92,7 @@ def _build_manifest(models, eval_configs, gen_params, device, think):
         "device": device,
         "gpu": gpu_name,
         "think": think,
+        "backend": backend,
         "python_version": sys.version,
         "torch_version": torch.__version__,
         "platform": platform.platform(),
@@ -127,6 +128,47 @@ def _print_summary(results: dict):
     print()
 
 
+def load_eval_configs(path_or_name: str) -> list[dict]:
+    """Load eval configs from a YAML file or the built-in defaults."""
+    import yaml
+    import importlib.resources
+
+    if path_or_name == "default":
+        ref = importlib.resources.files("eval_harness").joinpath("default_evals.yaml")
+        text = ref.read_text(encoding="utf-8")
+    else:
+        with open(path_or_name) as f:
+            text = f.read()
+
+    configs = yaml.safe_load(text)
+    if not isinstance(configs, list):
+        raise ValueError("eval config YAML must be a list of eval definitions")
+    return configs
+
+
+def _detect_backend(model) -> str:
+    """Detect whether a model object is vLLM or HuggingFace."""
+    if hasattr(model, "llm_engine"):
+        return "vllm"
+    return "hf"
+
+
+def _make_generate_fn(backend: str, model, tokenizer):
+    """Return a unified generate(prompts, **kwargs) callable."""
+    if backend == "hf":
+        from eval_harness.utils.generation_hf import batched_generate_hf
+
+        def _gen(prompts, **kw):
+            return batched_generate_hf(model, tokenizer, prompts, **kw)
+
+        return _gen
+
+    def _gen(prompts, **kw):
+        return batched_generate(model, prompts, **kw)
+
+    return _gen
+
+
 def evaluate(
     models: list[str],
     eval_configs: list[dict],
@@ -139,6 +181,7 @@ def evaluate(
     device: str = "cuda",
     think: bool = False,
     limit: int | None = None,
+    backend: str = "vllm",
 ) -> str:
     for cfg in eval_configs:
         errors = validate_config(cfg)
@@ -162,6 +205,7 @@ def evaluate(
         "temperature": temperature,
         "pass_k": pass_k,
         "limit": limit,
+        "backend": backend,
     }
 
     fingerprint = _run_fingerprint(models, eval_configs, gen_params, think=think)
@@ -177,7 +221,7 @@ def evaluate(
             "timestamp": timestamp,
             "fingerprint": fingerprint,
             "comment": comment,
-            "manifest": _build_manifest(models, eval_configs, gen_params, device, think),
+            "manifest": _build_manifest(models, eval_configs, gen_params, device, think, backend),
             "results": {},
             "config": gen_params,
             "examples": {},
@@ -194,12 +238,21 @@ def evaluate(
     try:
         for model_path in models:
             model_key = model_path
-            print(f"\nLoading model: {model_path}")
-            llm, tokenizer = load_model(model_path, device=device)
+            print(f"\nLoading model: {model_path} (backend={backend})")
+            if backend == "hf":
+                from eval_harness.models.loader_hf import load_model_hf
+                llm, tokenizer = load_model_hf(model_path, device=device)
+            else:
+                llm, tokenizer = load_model(model_path, device=device)
+
+            generate_fn = _make_generate_fn(backend, llm, tokenizer)
 
             model_info = state["manifest"].setdefault("model_info", {})
             try:
-                dtype_str = str(llm.llm_engine.model_config.dtype).replace("torch.", "")
+                if backend == "vllm":
+                    dtype_str = str(llm.llm_engine.model_config.dtype).replace("torch.", "")
+                else:
+                    dtype_str = str(llm.dtype).replace("torch.", "")
             except Exception:
                 dtype_str = "unknown"
             model_info[model_key] = {"dtype": dtype_str}
@@ -298,8 +351,7 @@ def evaluate(
 
                     gen_start = time.time()
                     try:
-                        outputs = batched_generate(
-                            llm,
+                        outputs = generate_fn(
                             prompts,
                             max_new_tokens=eval_max_tokens,
                             temperature=sample_temp,
@@ -529,3 +581,130 @@ def _apply_records(records, state, model_key, eval_name, ctr, pbar):
         if record.get("truncated"):
             ctr["truncated_count"] += 1
         pbar.update(1)
+
+
+def quick_eval(
+    model,
+    tokenizer=None,
+    eval_configs: str | list[dict] = "default",
+    limit: int | None = 50,
+    batch_size: int = 8,
+    max_new_tokens: int = 512,
+    temperature: float = 0.0,
+    pass_k: int | None = None,
+    think: bool = False,
+    output_dir: str | None = None,
+) -> dict:
+    """Run evaluations on a pre-loaded model and return results.
+
+    Designed for training-loop integration — accepts a model object directly
+    (vLLM LLM or HuggingFace model) instead of a path.
+
+    Returns ``{eval_name: {"score": float, "n": int, ...}, ...}``.
+    """
+    backend = _detect_backend(model)
+
+    if tokenizer is None:
+        if backend == "vllm":
+            tokenizer = model.get_tokenizer()
+        else:
+            raise ValueError("tokenizer is required for HuggingFace models")
+
+    if isinstance(eval_configs, str):
+        eval_configs = load_eval_configs(eval_configs)
+
+    for cfg in eval_configs:
+        errors = validate_config(cfg)
+        if errors:
+            raise ValueError(f"Invalid eval config {cfg.get('name', '?')}: {'; '.join(errors)}")
+
+    if limit is not None and limit < 1:
+        raise ValueError(f"limit must be >= 1, got {limit}")
+
+    generate_fn = _make_generate_fn(backend, model, tokenizer)
+
+    results: dict = {}
+
+    for cfg in eval_configs:
+        eval_obj = GenericEval(cfg, think=think)
+        eval_name = eval_obj.name
+
+        data = eval_obj.load_data()
+        if limit is not None:
+            data = data[:limit]
+
+        eval_max_tokens = eval_obj.max_new_tokens or max_new_tokens
+        use_pass_k = pass_k is not None and eval_obj.is_code_eval
+        num_samples = pass_k if use_pass_k else 1
+        sample_temp = temperature if temperature > 0 else (0.8 if use_pass_k else 0.0)
+
+        prompts = [eval_obj.format_prompt(ex, tokenizer) for ex in data]
+
+        all_outputs = []
+        for i in range(0, len(prompts), batch_size):
+            chunk_prompts = prompts[i:i + batch_size]
+            try:
+                outputs = generate_fn(
+                    chunk_prompts,
+                    max_new_tokens=eval_max_tokens,
+                    temperature=sample_temp,
+                    num_return_sequences=num_samples,
+                )
+                all_outputs.extend(outputs)
+            except Exception as e:
+                print(f"  Generation error in {eval_name}: {e}")
+                from eval_harness.utils.generation import GenerationResult
+                for _ in chunk_prompts:
+                    all_outputs.append(GenerationResult(text=[""], token_count=0, truncated=False))
+
+        total_score = 0.0
+        correct = 0
+        incorrect = 0
+        errored = 0
+
+        for ex, gen_result in zip(data, all_outputs):
+            try:
+                if use_pass_k:
+                    sample_results = []
+                    for sample in gen_result.text:
+                        s, _info = eval_obj.score(sample, ex["ground_truth"], example=ex)
+                        sample_results.append(s)
+                    c = sum(1 for s in sample_results if s >= 1.0)
+                    example_score = pass_at_k(len(sample_results), c, pass_k)
+                else:
+                    example_score, _info = eval_obj.score(
+                        gen_result.text[0], ex["ground_truth"], example=ex,
+                    )
+                total_score += example_score
+                if example_score > 0:
+                    correct += 1
+                else:
+                    incorrect += 1
+            except Exception:
+                errored += 1
+
+        n_total = len(data)
+        avg_score = total_score / n_total if n_total > 0 else 0.0
+
+        metric = eval_obj.metric_name
+        if use_pass_k:
+            metric = f"pass@{pass_k}"
+
+        results[eval_name] = {
+            "score": round(avg_score, 4),
+            "n": n_total,
+            "correct": correct,
+            "incorrect": incorrect,
+            "errored": errored,
+            "metric": metric,
+        }
+        print(f"  {eval_name}: {avg_score:.1%} ({correct}/{n_total})")
+
+    if output_dir is not None:
+        os.makedirs(output_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        out_path = os.path.join(output_dir, f"quick_eval_{timestamp}.json")
+        _save_state_atomic(out_path, {"results": results, "timestamp": timestamp})
+        print(f"Results saved to {out_path}")
+
+    return results

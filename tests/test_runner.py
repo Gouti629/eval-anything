@@ -1,4 +1,4 @@
-"""Tests for runner — resume fingerprinting, atomic saves, OOM batch halving."""
+"""Tests for runner — resume fingerprinting, atomic saves, backend dispatch, quick_eval."""
 import json
 import os
 import tempfile
@@ -11,6 +11,9 @@ from eval_harness.runner import (
     _run_fingerprint,
     _find_matching_partial,
     _serialize_gt,
+    load_eval_configs,
+    _detect_backend,
+    _make_generate_fn,
 )
 
 
@@ -285,3 +288,154 @@ class TestSerializeGt:
 
     def test_int_becomes_string(self):
         assert _serialize_gt(42) == "42"
+
+
+class TestLoadEvalConfigs:
+    def test_load_default(self):
+        configs = load_eval_configs("default")
+        assert isinstance(configs, list)
+        assert len(configs) > 0
+        names = [c["name"] for c in configs]
+        assert "gsm8k" in names
+
+    def test_load_nonexistent_raises(self):
+        with pytest.raises(FileNotFoundError):
+            load_eval_configs("/nonexistent/path.yaml")
+
+
+class TestDetectBackend:
+    def test_vllm_detected(self):
+        class FakeVllm:
+            llm_engine = object()
+        assert _detect_backend(FakeVllm()) == "vllm"
+
+    def test_hf_detected(self):
+        class FakeHF:
+            pass
+        assert _detect_backend(FakeHF()) == "hf"
+
+
+class TestMakeGenerateFn:
+    def test_vllm_path(self):
+        calls = []
+
+        class FakeModel:
+            llm_engine = object()
+
+        from eval_harness.utils.generation import GenerationResult
+
+        original = __import__("eval_harness.utils.generation", fromlist=["batched_generate"])
+
+        gen_fn = _make_generate_fn("vllm", FakeModel(), None)
+        assert callable(gen_fn)
+
+    def test_hf_path(self):
+        gen_fn = _make_generate_fn("hf", object(), object())
+        assert callable(gen_fn)
+
+
+class TestBackendInFingerprint:
+    def test_different_backend_different_fingerprint(self):
+        fp1 = _run_fingerprint(["m"], [{"dataset": "d"}], {"bs": 8, "backend": "vllm"})
+        fp2 = _run_fingerprint(["m"], [{"dataset": "d"}], {"bs": 8, "backend": "hf"})
+        assert fp1 != fp2
+
+
+class TestQuickEvalValidation:
+    def test_missing_tokenizer_for_hf(self):
+        from eval_harness.runner import quick_eval
+
+        class FakeHF:
+            pass
+
+        with pytest.raises(ValueError, match="tokenizer is required"):
+            quick_eval(FakeHF(), eval_configs=[{
+                "name": "t", "dataset": "d", "question_field": "q",
+                "answer_field": "a",
+            }])
+
+    def test_invalid_limit(self):
+        from eval_harness.runner import quick_eval
+
+        class FakeVllm:
+            llm_engine = object()
+            def get_tokenizer(self):
+                return object()
+
+        with pytest.raises(ValueError, match="limit must be >= 1"):
+            quick_eval(FakeVllm(), limit=0, eval_configs=[{
+                "name": "t", "dataset": "d", "question_field": "q",
+                "answer_field": "a",
+            }])
+
+    def test_invalid_config(self):
+        from eval_harness.runner import quick_eval
+
+        class FakeVllm:
+            llm_engine = object()
+            def get_tokenizer(self):
+                return object()
+
+        with pytest.raises(ValueError, match="Invalid eval config"):
+            quick_eval(FakeVllm(), eval_configs=[{"name": "t"}])
+
+
+class TestCompareRuns:
+    def test_two_run_comparison(self):
+        from eval_harness.comparison import compare_runs
+        with tempfile.TemporaryDirectory() as d:
+            r1 = {"results": {"model_a": {"gsm8k": {"score": 0.5}, "arc": {"score": 0.6}}}}
+            r2 = {"results": {"model_b": {"gsm8k": {"score": 0.7}, "arc": {"score": 0.4}}}}
+            p1 = os.path.join(d, "r1.json")
+            p2 = os.path.join(d, "r2.json")
+            with open(p1, "w") as f:
+                json.dump(r1, f)
+            with open(p2, "w") as f:
+                json.dump(r2, f)
+
+            data = compare_runs([p1, p2])
+            assert "arc" in data["evals"]
+            assert "gsm8k" in data["evals"]
+            assert "deltas" in data
+            assert data["deltas"]["gsm8k"] == pytest.approx(0.2)
+            assert data["deltas"]["arc"] == pytest.approx(-0.2)
+
+    def test_single_run_no_deltas(self):
+        from eval_harness.comparison import compare_runs
+        with tempfile.TemporaryDirectory() as d:
+            r1 = {"results": {"model_a": {"gsm8k": {"score": 0.5}}}}
+            p1 = os.path.join(d, "r1.json")
+            with open(p1, "w") as f:
+                json.dump(r1, f)
+
+            data = compare_runs([p1])
+            assert "deltas" not in data
+
+    def test_mismatched_evals(self):
+        from eval_harness.comparison import compare_runs
+        with tempfile.TemporaryDirectory() as d:
+            r1 = {"results": {"m": {"gsm8k": {"score": 0.5}}}}
+            r2 = {"results": {"m": {"arc": {"score": 0.7}}}}
+            p1 = os.path.join(d, "r1.json")
+            p2 = os.path.join(d, "r2.json")
+            with open(p1, "w") as f:
+                json.dump(r1, f)
+            with open(p2, "w") as f:
+                json.dump(r2, f)
+
+            data = compare_runs([p1, p2])
+            assert data["deltas"]["gsm8k"] is None
+            assert data["deltas"]["arc"] is None
+
+    def test_print_comparison_no_crash(self):
+        from eval_harness.comparison import print_comparison
+        with tempfile.TemporaryDirectory() as d:
+            r1 = {"results": {"m": {"gsm8k": {"score": 0.5}}}}
+            r2 = {"results": {"m": {"gsm8k": {"score": 0.7}}}}
+            p1 = os.path.join(d, "r1.json")
+            p2 = os.path.join(d, "r2.json")
+            with open(p1, "w") as f:
+                json.dump(r1, f)
+            with open(p2, "w") as f:
+                json.dump(r2, f)
+            print_comparison([p1, p2])

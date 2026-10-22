@@ -11,8 +11,12 @@ def main():
     parser.add_argument(
         "--model",
         action="append",
-        required=True,
+        required=False,
         help="Model name or local checkpoint path (repeat for multiple)",
+    )
+    parser.add_argument(
+        "--compare", nargs="+", metavar="FILE",
+        help="Compare result files instead of running evals",
     )
 
     eval_group = parser.add_argument_group("eval specification (use --eval_config OR inline flags)")
@@ -36,6 +40,12 @@ def main():
     eval_group.add_argument("--system_prompt", type=str, default="", help="System prompt string")
     eval_group.add_argument("--prepend_prompt", action="store_true", help="Prepend question to output before scoring")
     eval_group.add_argument("--eval_name", type=str, default=None, help="Name for inline eval (defaults to dataset name)")
+    eval_group.add_argument("--few_shot", type=int, default=None,
+                            help="Number of few-shot examples to prepend from train split")
+    eval_group.add_argument("--few_shot_split", type=str, default="train",
+                            help="Dataset split for few-shot examples (default: train)")
+    eval_group.add_argument("--few_shot_seed", type=int, default=42,
+                            help="Random seed for few-shot sampling (default: 42)")
 
     parser.add_argument("--comment", type=str, default=None, help="Free-text comment for logging")
     parser.add_argument("--output", type=str, default="./results", help="Results directory")
@@ -44,10 +54,26 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.0, help="Generation temperature (0.0 = greedy)")
     parser.add_argument("--pass_k", type=int, default=None, help="Number of samples for pass@k (code evals only)")
     parser.add_argument("--device", type=str, default="cuda", help="Device for inference")
+    parser.add_argument("--backend", type=str, default="vllm", choices=["vllm", "hf"],
+                        help="Inference backend: vllm (default, GPU required) or hf (HuggingFace, supports CPU)")
+    parser.add_argument("--sandbox", type=str, default="auto", choices=["auto", "docker", "bwrap", "none"],
+                        help="Code execution sandbox: auto (default), docker, bwrap, or none")
     parser.add_argument("--think", action="store_true", help="Enable thinking mode (keep <think> token in prompt)")
     parser.add_argument("--limit", type=int, default=None, help="Evaluate only the first N examples per eval")
 
     args = parser.parse_args()
+
+    if args.compare:
+        from eval_harness.comparison import print_comparison
+        print_comparison(args.compare)
+        return
+
+    if not args.model:
+        parser.error("--model is required when running evaluations")
+
+    if args.sandbox != "auto":
+        from eval_harness.rewards.code_execution import set_sandbox_mode
+        set_sandbox_mode(args.sandbox)
 
     temperature = args.temperature
     if args.pass_k is not None and temperature == 0.0:
@@ -69,6 +95,7 @@ def main():
         device=args.device,
         think=args.think,
         limit=args.limit,
+        backend=args.backend,
     )
 
 
@@ -98,26 +125,18 @@ def _resolve_eval_configs(args) -> list[dict]:
             config["filter"] = args.filter
         if args.prepend_prompt:
             config["prepend_prompt"] = True
+        if args.few_shot is not None:
+            config["few_shot"] = args.few_shot
+            config["few_shot_split"] = args.few_shot_split
+            config["few_shot_seed"] = args.few_shot_seed
         return [config]
 
     return []
 
 
 def _load_eval_config(path: str) -> list[dict]:
-    import yaml
-    import importlib.resources
-
-    if path == "default":
-        ref = importlib.resources.files("eval_harness").joinpath("default_evals.yaml")
-        text = ref.read_text(encoding="utf-8")
-    else:
-        with open(path) as f:
-            text = f.read()
-
-    configs = yaml.safe_load(text)
-    if not isinstance(configs, list):
-        raise ValueError("eval config YAML must be a list of eval definitions")
-    return configs
+    from eval_harness.runner import load_eval_configs
+    return load_eval_configs(path)
 
 
 if __name__ == "__main__":

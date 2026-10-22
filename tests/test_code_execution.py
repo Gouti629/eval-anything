@@ -3,7 +3,9 @@ import os
 import platform
 import pytest
 
-from eval_harness.rewards.code_execution import execute_code
+from eval_harness.rewards.code_execution import (
+    execute_code, set_sandbox_mode, _detect_sandbox,
+)
 
 
 class TestExecuteCode:
@@ -68,3 +70,36 @@ class TestCodeExecutionIsolation:
     def test_fork_bomb_contained(self):
         code = "import os\nfor _ in range(1000): os.fork()"
         assert execute_code(code, "", timeout=3) == 0.0
+
+
+class TestSandboxMode:
+    def setup_method(self):
+        set_sandbox_mode("auto")
+
+    def teardown_method(self):
+        set_sandbox_mode("auto")
+
+    def test_set_mode_none(self):
+        set_sandbox_mode("none")
+        assert _detect_sandbox() == "none"
+
+    def test_set_mode_docker(self):
+        set_sandbox_mode("docker")
+        assert _detect_sandbox() == "docker"
+
+    def test_set_mode_bwrap(self):
+        set_sandbox_mode("bwrap")
+        assert _detect_sandbox() == "bwrap"
+
+    def test_invalid_mode_raises(self):
+        with pytest.raises(ValueError, match="sandbox must be one of"):
+            set_sandbox_mode("invalid")
+
+    def test_auto_returns_valid(self):
+        set_sandbox_mode("auto")
+        result = _detect_sandbox()
+        assert result in ("docker", "bwrap", "none")
+
+    def test_unsandboxed_still_works(self):
+        set_sandbox_mode("none")
+        assert execute_code("x = 1 + 1", "assert x == 2") == 1.0

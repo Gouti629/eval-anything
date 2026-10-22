@@ -421,3 +421,92 @@ class TestExampleId:
         e1 = ev._normalize_row({"q": "hello", "a": "world"}, 0)
         e2 = ev._normalize_row({"q": "different", "a": "data"}, 0)
         assert e1["example_id"] != e2["example_id"]
+
+
+class TestFewShotConfig:
+    def test_few_shot_stored(self):
+        cfg = {
+            "name": "t", "dataset": "d", "question_field": "q",
+            "answer_field": "a", "few_shot": 5, "few_shot_split": "validation",
+            "few_shot_seed": 123,
+        }
+        ev = GenericEval(cfg)
+        assert ev.few_shot == 5
+        assert ev.few_shot_split == "validation"
+        assert ev.few_shot_seed == 123
+
+    def test_few_shot_defaults(self):
+        cfg = {"name": "t", "dataset": "d", "question_field": "q", "answer_field": "a"}
+        ev = GenericEval(cfg)
+        assert ev.few_shot is None
+        assert ev.few_shot_split == "train"
+        assert ev.few_shot_seed == 42
+
+    def test_zero_few_shot_returns_empty(self):
+        cfg = {
+            "name": "t", "dataset": "d", "question_field": "q",
+            "answer_field": "a", "few_shot": 0,
+        }
+        ev = GenericEval(cfg)
+        assert ev._get_few_shot_examples() == []
+
+
+class TestFewShotFingerprint:
+    def test_few_shot_changes_fingerprint(self):
+        gen = {"batch_size": 8}
+        cfg1 = {"dataset": "d", "few_shot": None}
+        cfg2 = {"dataset": "d", "few_shot": 5}
+        assert config_fingerprint(cfg1, gen) != config_fingerprint(cfg2, gen)
+
+    def test_few_shot_seed_changes_fingerprint(self):
+        gen = {"batch_size": 8}
+        cfg1 = {"dataset": "d", "few_shot": 5, "few_shot_seed": 42}
+        cfg2 = {"dataset": "d", "few_shot": 5, "few_shot_seed": 99}
+        assert config_fingerprint(cfg1, gen) != config_fingerprint(cfg2, gen)
+
+
+class TestFewShotFormatPrompt:
+    def _make_eval_with_shots(self, few_shot_examples):
+        cfg = {
+            "name": "t", "dataset": "d", "question_field": "q",
+            "answer_field": "a", "system_prompt": "Solve it.",
+        }
+        ev = GenericEval(cfg)
+        ev._few_shot_examples = few_shot_examples
+        return ev
+
+    def _dummy_tokenizer(self):
+        class Tok:
+            def apply_chat_template(self, messages, tokenize, add_generation_prompt):
+                return "\n".join(f"{m['role']}: {m['content']}" for m in messages) + "\nassistant:"
+        return Tok()
+
+    def test_few_shot_in_prompt(self):
+        ev = self._make_eval_with_shots([
+            {"question": "What is 1+1?", "answer": "2"},
+            {"question": "What is 2+2?", "answer": "4"},
+        ])
+        example = {"question": "What is 3+3?", "ground_truth": "6", "_raw": {}}
+        prompt = ev.format_prompt(example, self._dummy_tokenizer())
+        assert "What is 1+1?" in prompt
+        assert "assistant: 2" in prompt
+        assert "What is 2+2?" in prompt
+        assert "assistant: 4" in prompt
+        assert "What is 3+3?" in prompt
+
+    def test_no_few_shot_when_empty(self):
+        ev = self._make_eval_with_shots([])
+        example = {"question": "What is 3+3?", "ground_truth": "6", "_raw": {}}
+        prompt = ev.format_prompt(example, self._dummy_tokenizer())
+        assert prompt.count("user:") == 1
+
+    def test_system_prompt_before_few_shot(self):
+        ev = self._make_eval_with_shots([
+            {"question": "Q1", "answer": "A1"},
+        ])
+        example = {"question": "Q2", "ground_truth": "A2", "_raw": {}}
+        prompt = ev.format_prompt(example, self._dummy_tokenizer())
+        sys_pos = prompt.index("Solve it.")
+        fs_pos = prompt.index("Q1")
+        actual_pos = prompt.index("Q2")
+        assert sys_pos < fs_pos < actual_pos

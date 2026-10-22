@@ -10,7 +10,6 @@ requires-python = ">=3.9"
 dependencies = [
     "torch>=2.0",
     "transformers>=4.40",
-    "vllm>=0.6.0",
     "datasets>=2.0",
     "tqdm",
     "numpy",
@@ -19,6 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+vllm = ["vllm>=0.6.0"]
 test = ["pytest>=7.0"]
 
 [project.scripts]
