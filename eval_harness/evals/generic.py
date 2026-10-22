@@ -374,7 +374,9 @@ class GenericEval:
             prompt = tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
-        except Exception:
+        except Exception as e:
+            import warnings
+            warnings.warn(f"apply_chat_template failed ({e}), using plain format", stacklevel=2)
             prompt = ""
             for msg in messages:
                 prompt += f"{msg['role']}: {msg['content']}\n"

@@ -6,7 +6,12 @@ _DTYPE_MAP = {
 }
 
 
-def load_model(model_path: str, device: str = "cuda", dtype: str = "bfloat16"):
+def load_model(
+    model_path: str,
+    device: str = "cuda",
+    dtype: str = "bfloat16",
+    tensor_parallel_size: int = 1,
+):
     from vllm import LLM
 
     if not device.startswith("cuda"):
@@ -20,6 +25,7 @@ def load_model(model_path: str, device: str = "cuda", dtype: str = "bfloat16"):
         model=model_path,
         dtype=vllm_dtype,
         trust_remote_code=True,
+        tensor_parallel_size=tensor_parallel_size,
     )
     tokenizer = llm.get_tokenizer()
     return llm, tokenizer

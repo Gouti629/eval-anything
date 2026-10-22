@@ -25,6 +25,9 @@ eval-harness --model Qwen/Qwen2.5-0.5B \
   --question_field question --answer_field answer \
   --scorer number_extract --delimiter "####"
 
+# Multi-GPU with tensor parallelism
+eval-harness --model meta-llama/Llama-3-70B --eval_config default --tensor_parallel 4
+
 # 5-shot prompting
 eval-harness --model Qwen/Qwen2.5-0.5B --eval_config default --few_shot 5
 
@@ -45,7 +48,24 @@ results = quick_eval(model=llm, eval_configs="default", limit=50)
 # HuggingFace
 results = quick_eval(model=hf_model, tokenizer=tokenizer, eval_configs="default", limit=50)
 
-# Returns: {"gsm8k": {"score": 0.42, "n": 50, "correct": 21, ...}, ...}
+# Returns: {"gsm8k": {"score": 0.42, "n": 50, "correct": 21, "timing": {...}}, ...}
+```
+
+### WandB integration
+
+```python
+import wandb
+
+wandb.init(project="evals")
+
+def log_progress(info):
+    wandb.log({f"{info['eval']}/score": info["score_so_far"],
+               f"{info['eval']}/progress": info["done"] / info["total"]})
+
+results = quick_eval(model=llm, callback=log_progress)
+for name, r in results.items():
+    wandb.log({f"{name}/final_score": r["score"],
+               f"{name}/tokens_per_second": r["timing"]["tokens_per_second"]})
 ```
 
 ## Built-in benchmarks
@@ -71,6 +91,7 @@ results = quick_eval(model=hf_model, tokenizer=tokenizer, eval_configs="default"
 | `--batch_size` | `8` | Batch/chunk size. |
 | `--max_new_tokens` | `512` | Generation token limit. |
 | `--temperature` | `0.0` | Sampling temperature. 0 = greedy. |
+| `--tensor_parallel` | `1` | Number of GPUs for tensor parallelism (vLLM only). |
 | `--think` | off | Keep `<think>` token for reasoning models. |
 
 **Eval specification**
@@ -141,4 +162,4 @@ pip install -e ".[test]"
 pytest
 ```
 
-Tests run on Python 3.9+ without GPU, vLLM, or network access.
+Tests run on Python 3.10+ without GPU, vLLM, or network access.

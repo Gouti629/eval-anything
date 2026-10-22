@@ -439,3 +439,33 @@ class TestCompareRuns:
             with open(p2, "w") as f:
                 json.dump(r2, f)
             print_comparison([p1, p2])
+
+
+class TestCallbackTypeHint:
+    def test_callback_param_annotated(self):
+        from eval_harness.runner import quick_eval
+        import inspect
+        sig = inspect.signature(quick_eval)
+        p = sig.parameters["callback"]
+        assert p.default is None
+
+    def test_tensor_parallel_param_exists(self):
+        from eval_harness.runner import evaluate
+        import inspect
+        sig = inspect.signature(evaluate)
+        p = sig.parameters["tensor_parallel_size"]
+        assert p.default == 1
+
+
+class TestPlotMissingEvals:
+    def test_missing_eval_uses_nan(self):
+        import numpy as np
+        from eval_harness.plotting.compare import plot_comparison
+        results = {
+            "model_a": {"gsm8k": {"score": 0.5}},
+            "model_b": {"gsm8k": {"score": 0.7}, "arc": {"score": 0.4}},
+        }
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "chart.png")
+            plot_comparison(results, out)
+            assert os.path.exists(out)

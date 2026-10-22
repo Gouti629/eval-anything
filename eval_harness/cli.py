@@ -60,6 +60,8 @@ def main():
                         help="Code execution sandbox: auto (default), docker, bwrap, or none")
     parser.add_argument("--think", action="store_true", help="Enable thinking mode (keep <think> token in prompt)")
     parser.add_argument("--limit", type=int, default=None, help="Evaluate only the first N examples per eval")
+    parser.add_argument("--tensor_parallel", type=int, default=1,
+                        help="Number of GPUs for tensor parallelism (vLLM only, default: 1)")
 
     args = parser.parse_args()
 
@@ -96,6 +98,7 @@ def main():
         think=args.think,
         limit=args.limit,
         backend=args.backend,
+        tensor_parallel_size=args.tensor_parallel,
     )
 
 

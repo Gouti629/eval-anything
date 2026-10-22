@@ -374,6 +374,7 @@ class TestExtractCode:
         text = "```python\nwrong\n```\nActually:\n```python\ndef f():\n    return 2\n```"
         result = _extract_code(text)
         assert "return 2" in result
+        assert "wrong" not in result
 
     def test_generic_code_block(self):
         text = "```\ndef f():\n    return 1\n```"

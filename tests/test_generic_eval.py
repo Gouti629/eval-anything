@@ -510,3 +510,69 @@ class TestFewShotFormatPrompt:
         fs_pos = prompt.index("Q1")
         actual_pos = prompt.index("Q2")
         assert sys_pos < fs_pos < actual_pos
+
+
+class TestThinkSuppressionPatterns:
+    def _make_eval(self, think=False):
+        cfg = {
+            "name": "t", "dataset": "d",
+            "question_field": "q", "answer_field": "a",
+        }
+        return GenericEval(cfg, think=think)
+
+    def _dummy_tokenizer(self, template):
+        class Tok:
+            def __init__(self, tpl):
+                self._tpl = tpl
+            def apply_chat_template(self, messages, tokenize=False, add_generation_prompt=True):
+                return self._tpl
+        return Tok(template)
+
+    def test_qwen_pattern_suppressed(self):
+        ev = self._make_eval(think=False)
+        tok = self._dummy_tokenizer("<|im_start|>assistant\n<think>\nreasoning")
+        example = {"question": "x", "ground_truth": "y", "_raw": {}}
+        prompt = ev.format_prompt(example, tok)
+        assert "<think>" not in prompt
+        assert "<|im_start|>assistant\n" in prompt
+
+    def test_llama_pattern_suppressed(self):
+        ev = self._make_eval(think=False)
+        tok = self._dummy_tokenizer("<|start_header_id|>assistant<|end_header_id|>\n\n<think>\nreasoning")
+        example = {"question": "x", "ground_truth": "y", "_raw": {}}
+        prompt = ev.format_prompt(example, tok)
+        assert "<think>" not in prompt
+
+    def test_gemma_pattern_suppressed(self):
+        ev = self._make_eval(think=False)
+        tok = self._dummy_tokenizer("<start_of_turn>model\n<think>\nreasoning")
+        example = {"question": "x", "ground_truth": "y", "_raw": {}}
+        prompt = ev.format_prompt(example, tok)
+        assert "<think>" not in prompt
+
+    def test_think_enabled_keeps_token(self):
+        ev = self._make_eval(think=True)
+        tok = self._dummy_tokenizer("<|im_start|>assistant\n<think>\nreasoning")
+        example = {"question": "x", "ground_truth": "y", "_raw": {}}
+        prompt = ev.format_prompt(example, tok)
+        assert "<think>" in prompt
+
+
+class TestAnswerTransformRegistry:
+    def test_livecodebench_transform_stdin(self):
+        raw = [{"input": "5", "output": "10", "testtype": "stdin"}]
+        result = _transform_livecodebench_tests(raw)
+        assert len(result) == 1
+        assert "sys.stdin" in result[0]
+        assert "assert" in result[0]
+
+    def test_livecodebench_transform_func(self):
+        raw = [{"input": "5", "output": "10", "func_name": "solve"}]
+        result = _transform_livecodebench_tests(raw)
+        assert "solve(5)" in result[0]
+
+    def test_livecodebench_from_json_string(self):
+        import json
+        raw = json.dumps([{"input": "1", "output": "2"}])
+        result = _transform_livecodebench_tests(raw)
+        assert len(result) == 1

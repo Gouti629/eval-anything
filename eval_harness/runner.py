@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 import hashlib
 import json
 import math
@@ -182,6 +183,7 @@ def evaluate(
     think: bool = False,
     limit: int | None = None,
     backend: str = "vllm",
+    tensor_parallel_size: int = 1,
 ) -> str:
     for cfg in eval_configs:
         errors = validate_config(cfg)
@@ -243,7 +245,8 @@ def evaluate(
                 from eval_harness.models.loader_hf import load_model_hf
                 llm, tokenizer = load_model_hf(model_path, device=device)
             else:
-                llm, tokenizer = load_model(model_path, device=device)
+                llm, tokenizer = load_model(model_path, device=device,
+                                            tensor_parallel_size=tensor_parallel_size)
 
             generate_fn = _make_generate_fn(backend, llm, tokenizer)
 
@@ -597,7 +600,7 @@ def quick_eval(
     pass_k: int | None = None,
     think: bool = False,
     output_dir: str | None = None,
-    callback=None,
+    callback: "Callable[[dict], None] | None" = None,
 ) -> dict:
     """Run evaluations on a pre-loaded model and return results.
 
