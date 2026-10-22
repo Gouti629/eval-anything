@@ -4,8 +4,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import warnings
-
 
 _sandbox_mode = "auto"
 _sandbox_warned = False

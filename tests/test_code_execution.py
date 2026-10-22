@@ -1,10 +1,12 @@
 """Tests for sandboxed code execution."""
-import os
 import platform
+
 import pytest
 
 from eval_anything.rewards.code_execution import (
-    execute_code, set_sandbox_mode, _detect_sandbox,
+    _detect_sandbox,
+    execute_code,
+    set_sandbox_mode,
 )
 
 

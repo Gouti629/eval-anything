@@ -1,7 +1,8 @@
 """Tests for CLI argument parsing."""
 import os
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from eval_anything.cli import main
 

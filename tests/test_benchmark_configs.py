@@ -4,11 +4,12 @@ These tests do NOT download real datasets. They verify that GenericEval's
 normalization, formatting, and scoring work correctly with the field
 structures that each benchmark actually provides.
 """
-import pytest
-import yaml
 import importlib.resources
 
-from eval_anything.evals.generic import GenericEval, ConfigError
+import pytest
+import yaml
+
+from eval_anything.evals.generic import GenericEval
 
 
 def _load_default_configs():

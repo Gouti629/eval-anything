@@ -6,14 +6,14 @@ import tempfile
 import pytest
 
 from eval_anything.runner import (
-    pass_at_k,
-    _save_state_atomic,
-    _run_fingerprint,
+    _detect_backend,
     _find_matching_partial,
+    _make_generate_fn,
+    _run_fingerprint,
+    _save_state_atomic,
     _serialize_gt,
     load_eval_configs,
-    _detect_backend,
-    _make_generate_fn,
+    pass_at_k,
 )
 
 
@@ -221,6 +221,7 @@ class TestPlotComparison:
 
     def test_different_eval_subsets_no_crash(self):
         import tempfile
+
         from eval_anything.plotting.compare import plot_comparison
         results = {
             "model_a": {
@@ -238,6 +239,7 @@ class TestPlotComparison:
 
     def test_no_shared_evals(self):
         import tempfile
+
         from eval_anything.plotting.compare import plot_comparison
         results = {
             "model_a": {"gsm8k": {"score": 0.8}},
@@ -317,14 +319,8 @@ class TestDetectBackend:
 
 class TestMakeGenerateFn:
     def test_vllm_path(self):
-        calls = []
-
         class FakeModel:
             llm_engine = object()
-
-        from eval_anything.utils.generation import GenerationResult
-
-        original = __import__("eval_anything.utils.generation", fromlist=["batched_generate"])
 
         gen_fn = _make_generate_fn("vllm", FakeModel(), None)
         assert callable(gen_fn)
@@ -443,15 +439,17 @@ class TestCompareRuns:
 
 class TestCallbackTypeHint:
     def test_callback_param_annotated(self):
-        from eval_anything.runner import quick_eval
         import inspect
+
+        from eval_anything.runner import quick_eval
         sig = inspect.signature(quick_eval)
         p = sig.parameters["callback"]
         assert p.default is None
 
     def test_tensor_parallel_param_exists(self):
-        from eval_anything.runner import evaluate
         import inspect
+
+        from eval_anything.runner import evaluate
         sig = inspect.signature(evaluate)
         p = sig.parameters["tensor_parallel_size"]
         assert p.default == 1
@@ -459,7 +457,6 @@ class TestCallbackTypeHint:
 
 class TestPlotMissingEvals:
     def test_missing_eval_uses_nan(self):
-        import numpy as np
         from eval_anything.plotting.compare import plot_comparison
         results = {
             "model_a": {"gsm8k": {"score": 0.5}},

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 import hashlib
 import json
 import math
@@ -9,6 +8,7 @@ import platform
 import sys
 import time
 import traceback
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -19,8 +19,8 @@ from eval_anything.evals.generic import GenericEval, config_fingerprint, validat
 from eval_anything.models import load_model
 from eval_anything.plotting.compare import plot_comparison, sanitize_model_name
 from eval_anything.utils.checkpoint import (
-    find_matching_partial,
     final_path,
+    find_matching_partial,
     is_example_done,
     partial_path,
     save_state_atomic,
@@ -106,8 +106,9 @@ def _print_summary(results: dict):
 
 def load_eval_configs(path_or_name: str) -> list[dict]:
     """Load eval configs from a YAML file or the built-in defaults."""
-    import yaml
     import importlib.resources
+
+    import yaml
 
     if path_or_name == "default":
         ref = importlib.resources.files("eval_anything").joinpath("default_evals.yaml")

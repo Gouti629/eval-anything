@@ -2,17 +2,15 @@
 import pytest
 
 from eval_anything.rewards.scorers import (
-    _strip_think,
-    _extract_boxed,
     _extract_code,
     _normalize_number,
-    exact_match,
-    number_extract,
+    _strip_think,
     boxed_latex,
-    letter_match,
     code_exec,
+    exact_match,
+    letter_match,
+    number_extract,
 )
-
 
 # === _strip_think ===
 

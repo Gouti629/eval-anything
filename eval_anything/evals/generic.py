@@ -11,7 +11,6 @@ from datasets import load_dataset
 
 from eval_anything.rewards.scorers import SCORERS, _strip_think
 
-
 _REQUIRED_FIELDS = {"name", "dataset", "question_field", "answer_field"}
 _VALID_SCORERS = set(SCORERS.keys())
 _VALID_FORMATTERS = {"plain", "multiple_choice", "code_completion"}
