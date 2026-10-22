@@ -16,6 +16,13 @@ _VALID_SCORERS = set(SCORERS.keys())
 _VALID_FORMATTERS = {"plain", "multiple_choice", "code_completion"}
 _FUNC_NAME_RE = re.compile(r"assert\s+(\w+)\s*\(")
 
+_THINK_SUPPRESSION_PATTERNS = [
+    ("<|im_start|>assistant\n<think>\n", "<|im_start|>assistant\n"),
+    ("<|start_header_id|>assistant<|end_header_id|>\n\n<think>\n", "<|start_header_id|>assistant<|end_header_id|>\n\n"),
+    ("<start_of_turn>model\n<think>\n", "<start_of_turn>model\n"),
+    ("assistant\n<think>\n", "assistant\n"),
+]
+
 
 def _extract_func_name(ground_truth) -> str | None:
     tests = ground_truth if isinstance(ground_truth, list) else [str(ground_truth)]
@@ -374,10 +381,10 @@ class GenericEval:
             prompt += "assistant: "
 
         if not self.think:
-            prompt = prompt.replace(
-                "<|im_start|>assistant\n<think>\n",
-                "<|im_start|>assistant\n",
-            )
+            for pattern, replacement in _THINK_SUPPRESSION_PATTERNS:
+                if pattern in prompt:
+                    prompt = prompt.replace(pattern, replacement)
+                    break
         return prompt
 
     def score(self, generated: str, ground_truth, example: dict | None = None) -> tuple[float, dict]:

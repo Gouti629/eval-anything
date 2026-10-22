@@ -187,7 +187,7 @@ def _extract_code(text: str) -> str:
     blocks = re.findall(r"```\s*\n(.*?)```", text, re.DOTALL)
     if blocks:
         return blocks[-1].lstrip("\n").rstrip()
-    return text.strip()
+    return ""
 
 
 def code_exec(output: str, ground_truth, prepend: str | None = None, timeout: int = 10, **kwargs) -> tuple[float, dict]:

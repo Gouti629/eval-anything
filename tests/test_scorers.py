@@ -334,24 +334,24 @@ class TestLetterMatch:
 class TestCodeExec:
     def test_correct_code_with_list_gt(self):
         """MBPP ground_truth is a list — must NOT be stringified."""
-        code = "def add(a, b):\n    return a + b"
+        code = "```python\ndef add(a, b):\n    return a + b\n```"
         tests = ["assert add(1, 2) == 3", "assert add(0, 0) == 0"]
         score, info = code_exec(code, tests)
         assert score == 1.0
 
     def test_incorrect_code(self):
-        code = "def add(a, b):\n    return a - b"
+        code = "```python\ndef add(a, b):\n    return a - b\n```"
         tests = ["assert add(1, 2) == 3"]
         score, _ = code_exec(code, tests)
         assert score == 0.0
 
     def test_string_gt(self):
-        code = "def f():\n    return 1"
+        code = "```python\ndef f():\n    return 1\n```"
         score, _ = code_exec(code, "assert f() == 1")
         assert score == 1.0
 
     def test_timeout(self):
-        code = "import time\ntime.sleep(100)"
+        code = "```python\nimport time\ntime.sleep(100)\n```"
         score, _ = code_exec(code, "", timeout=1)
         assert score == 0.0
 
@@ -381,7 +381,7 @@ class TestExtractCode:
 
     def test_no_code_block(self):
         text = "def f():\n    return 1"
-        assert "def f():" in _extract_code(text)
+        assert _extract_code(text) == ""
 
 
 # === exact_match ===

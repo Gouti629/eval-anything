@@ -30,18 +30,22 @@ def plot_comparison(results: dict, output_path: str):
     fig, ax = plt.subplots(figsize=(max(8, len(eval_names) * 2), 6))
 
     for i, (model, short) in enumerate(zip(model_names, short_names)):
-        scores = [results[model].get(e, {}).get("score", 0) for e in eval_names]
+        scores = []
+        for e in eval_names:
+            s = results[model].get(e, {}).get("score")
+            scores.append(s if s is not None else float("nan"))
         offset = (i - len(model_names) / 2 + 0.5) * width
         bars = ax.bar(x + offset, scores, width, label=short)
         for bar, score in zip(bars, scores):
-            ax.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.01,
-                f"{score:.1%}",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-            )
+            if not np.isnan(score):
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.01,
+                    f"{score:.1%}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                )
 
     ax.set_ylabel("Score")
     ax.set_xlabel("Benchmark")

@@ -13,11 +13,15 @@ def batched_generate_hf(
 ) -> list[GenerationResult]:
     import torch
 
+    model_max = getattr(model.config, "max_position_embeddings", None) or tokenizer.model_max_length
+    max_input_len = model_max - max_new_tokens
+
     orig_padding_side = tokenizer.padding_side
     tokenizer.padding_side = "left"
     try:
         inputs = tokenizer(
-            prompts, return_tensors="pt", padding=True, truncation=True,
+            prompts, return_tensors="pt", padding=True,
+            truncation=True, max_length=max_input_len,
         )
     finally:
         tokenizer.padding_side = orig_padding_side

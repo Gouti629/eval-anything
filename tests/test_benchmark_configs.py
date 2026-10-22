@@ -116,14 +116,14 @@ class TestMBPPRowShape:
 
     def test_score_preserves_list_gt(self):
         ev = self._make_eval()
-        code = "def add(a, b):\n    return a + b"
+        code = "```python\ndef add(a, b):\n    return a + b\n```"
         tests = ["assert add(1, 2) == 3", "assert add(0, 0) == 0"]
         score, info = ev.score(code, tests)
         assert score == 1.0
 
     def test_score_wrong_code(self):
         ev = self._make_eval()
-        code = "def add(a, b):\n    return a - b"
+        code = "```python\ndef add(a, b):\n    return a - b\n```"
         tests = ["assert add(1, 2) == 3"]
         score, _ = ev.score(code, tests)
         assert score == 0.0

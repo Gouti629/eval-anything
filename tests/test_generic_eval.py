@@ -132,7 +132,7 @@ class TestScoreDispatch:
 
     def test_code_exec_correct(self):
         ev = self._make_eval("code_exec")
-        code = "def f(x): return x + 1"
+        code = "```python\ndef f(x): return x + 1\n```"
         gt = ["assert f(1) == 2", "assert f(0) == 1"]
         score, _ = ev.score(code, gt)
         assert score == 1.0

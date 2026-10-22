@@ -39,10 +39,11 @@ def execute_code(code: str, test_code: str, timeout: int = 10) -> float:
 
     global _sandbox_warned
     if not _sandbox_warned:
-        warnings.warn(
-            "Running model-generated code without sandbox isolation. "
-            "Install bubblewrap (bwrap) or Docker for safer execution.",
-            stacklevel=2,
+        print(
+            "\n  WARNING: Running model-generated code WITHOUT sandbox.\n"
+            "  Install bubblewrap (Linux: apt install bubblewrap) or use --sandbox docker.\n"
+            "  No network blocking, no filesystem isolation.\n",
+            flush=True,
         )
         _sandbox_warned = True
     return _execute_subprocess(full_code, timeout)

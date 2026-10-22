@@ -334,6 +334,7 @@ def evaluate(
                 pending_gen_tokens = 0
 
                 chunk_idx = 0
+                _last_save = time.time()
                 while chunk_idx < len(remaining_with_prompts):
                     if pending_future is not None:
                         score_start = time.time()
@@ -341,7 +342,9 @@ def evaluate(
                         total_score_time += time.time() - score_start
                         _apply_records(records, state, model_key, eval_name, ctr, pbar)
                         total_gen_tokens += pending_gen_tokens
-                        _save_state_atomic(partial_file, state)
+                        if time.time() - _last_save >= 30:
+                            _save_state_atomic(partial_file, state)
+                            _last_save = time.time()
                         pending_future = None
 
                     chunk = remaining_with_prompts[chunk_idx : chunk_idx + batch_size]
@@ -594,6 +597,7 @@ def quick_eval(
     pass_k: int | None = None,
     think: bool = False,
     output_dir: str | None = None,
+    callback=None,
 ) -> dict:
     """Run evaluations on a pre-loaded model and return results.
 
@@ -624,6 +628,7 @@ def quick_eval(
     generate_fn = _make_generate_fn(backend, model, tokenizer)
 
     results: dict = {}
+    all_examples: dict = {}
 
     for cfg in eval_configs:
         eval_obj = GenericEval(cfg, think=think)
@@ -640,9 +645,20 @@ def quick_eval(
 
         prompts = [eval_obj.format_prompt(ex, tokenizer) for ex in data]
 
-        all_outputs = []
+        total_score = 0.0
+        correct = 0
+        incorrect = 0
+        errored = 0
+        total_gen_tokens = 0
+        total_gen_time = 0.0
+        total_score_time = 0.0
+        examples_list: list[dict] = []
+
         for i in range(0, len(prompts), batch_size):
             chunk_prompts = prompts[i:i + batch_size]
+            chunk_data = data[i:i + batch_size]
+
+            gen_start = time.time()
             try:
                 outputs = generate_fn(
                     chunk_prompts,
@@ -650,38 +666,58 @@ def quick_eval(
                     temperature=sample_temp,
                     num_return_sequences=num_samples,
                 )
-                all_outputs.extend(outputs)
+                total_gen_time += time.time() - gen_start
             except Exception as e:
+                total_gen_time += time.time() - gen_start
                 print(f"  Generation error in {eval_name}: {e}")
                 from eval_harness.utils.generation import GenerationResult
-                for _ in chunk_prompts:
-                    all_outputs.append(GenerationResult(text=[""], token_count=0, truncated=False))
+                outputs = [GenerationResult(text=[""], token_count=0, truncated=False)
+                           for _ in chunk_prompts]
 
-        total_score = 0.0
-        correct = 0
-        incorrect = 0
-        errored = 0
+            total_gen_tokens += sum(r.token_count for r in outputs)
 
-        for ex, gen_result in zip(data, all_outputs):
-            try:
-                if use_pass_k:
-                    sample_results = []
-                    for sample in gen_result.text:
-                        s, _info = eval_obj.score(sample, ex["ground_truth"], example=ex)
-                        sample_results.append(s)
-                    c = sum(1 for s in sample_results if s >= 1.0)
-                    example_score = pass_at_k(len(sample_results), c, pass_k)
-                else:
-                    example_score, _info = eval_obj.score(
-                        gen_result.text[0], ex["ground_truth"], example=ex,
-                    )
-                total_score += example_score
-                if example_score > 0:
-                    correct += 1
-                else:
-                    incorrect += 1
-            except Exception:
-                errored += 1
+            score_start = time.time()
+            for ex, gen_result in zip(chunk_data, outputs):
+                example_score = 0.0
+                status = "error"
+                try:
+                    if use_pass_k:
+                        sample_results = []
+                        for sample in gen_result.text:
+                            s, _info = eval_obj.score(sample, ex["ground_truth"], example=ex)
+                            sample_results.append(s)
+                        c = sum(1 for s in sample_results if s >= 1.0)
+                        example_score = pass_at_k(len(sample_results), c, pass_k)
+                    else:
+                        example_score, _info = eval_obj.score(
+                            gen_result.text[0], ex["ground_truth"], example=ex,
+                        )
+                    if example_score > 0:
+                        correct += 1
+                        status = "ok"
+                    else:
+                        incorrect += 1
+                        status = "incorrect"
+                    total_score += example_score
+                except Exception:
+                    errored += 1
+
+                examples_list.append({
+                    "example_id": ex["example_id"],
+                    "score": example_score,
+                    "status": status,
+                })
+            total_score_time += time.time() - score_start
+
+            if callback is not None:
+                done = min(i + batch_size, len(data))
+                scored = correct + incorrect + errored
+                callback({
+                    "eval": eval_name,
+                    "done": done,
+                    "total": len(data),
+                    "score_so_far": total_score / scored if scored > 0 else 0.0,
+                })
 
         n_total = len(data)
         avg_score = total_score / n_total if n_total > 0 else 0.0
@@ -690,6 +726,8 @@ def quick_eval(
         if use_pass_k:
             metric = f"pass@{pass_k}"
 
+        gen_tok_per_sec = total_gen_tokens / total_gen_time if total_gen_time > 0 else 0
+
         results[eval_name] = {
             "score": round(avg_score, 4),
             "n": n_total,
@@ -697,14 +735,25 @@ def quick_eval(
             "incorrect": incorrect,
             "errored": errored,
             "metric": metric,
+            "timing": {
+                "generation_seconds": round(total_gen_time, 1),
+                "scoring_seconds": round(total_score_time, 1),
+                "generated_tokens": total_gen_tokens,
+                "tokens_per_second": round(gen_tok_per_sec, 1),
+            },
         }
-        print(f"  {eval_name}: {avg_score:.1%} ({correct}/{n_total})")
+        all_examples[eval_name] = examples_list
+        print(f"  {eval_name}: {avg_score:.1%} ({correct}/{n_total}) [{gen_tok_per_sec:.0f} tok/s]")
 
     if output_dir is not None:
         os.makedirs(output_dir, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         out_path = os.path.join(output_dir, f"quick_eval_{timestamp}.json")
-        _save_state_atomic(out_path, {"results": results, "timestamp": timestamp})
+        _save_state_atomic(out_path, {
+            "results": results,
+            "examples": all_examples,
+            "timestamp": timestamp,
+        })
         print(f"Results saved to {out_path}")
 
     return results
