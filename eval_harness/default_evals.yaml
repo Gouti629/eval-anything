@@ -47,6 +47,18 @@
   scorer: code_exec
   formatter: code_completion
 
+- name: mmlu
+  dataset: cais/mmlu
+  config: ['all']
+  split: test
+  question_field: question
+  answer_field: answer
+  answer_transform: index_to_letter
+  system_prompt: "Answer the multiple choice question. Reply with only the letter (A, B, C, or D)."
+  scorer: letter_match
+  formatter: multiple_choice
+  choices_field: choices
+
 - name: arc
   dataset: allenai/ai2_arc
   config: ['ARC-Challenge']

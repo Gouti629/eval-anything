@@ -60,8 +60,14 @@ def _transform_livecodebench_tests(raw_value) -> list[str]:
     return assertions
 
 
+def _transform_index_to_letter(raw_value) -> str:
+    idx = int(raw_value)
+    return "ABCDEFGHIJKLMNOP"[idx]
+
+
 _ANSWER_TRANSFORMS: dict[str, callable] = {
     "livecodebench_tests": _transform_livecodebench_tests,
+    "index_to_letter": _transform_index_to_letter,
 }
 
 

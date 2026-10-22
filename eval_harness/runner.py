@@ -292,6 +292,7 @@ def evaluate(
                 ctr = {"total_score": 0.0, "correct": 0, "incorrect": 0,
                        "timed_out": 0, "oom_count": 0, "errored": 0,
                        "truncated_count": 0}
+                failure_types: dict[str, int] = {}
                 n_done = 0
                 total_gen_tokens = 0
                 total_gen_time = 0.0
@@ -343,7 +344,7 @@ def evaluate(
                         score_start = time.time()
                         records = pending_future.result()
                         total_score_time += time.time() - score_start
-                        _apply_records(records, state, model_key, eval_name, ctr, pbar)
+                        _apply_records(records, state, model_key, eval_name, ctr, pbar, failure_types)
                         total_gen_tokens += pending_gen_tokens
                         if time.time() - _last_save >= 30:
                             _save_state_atomic(partial_file, state)
@@ -396,7 +397,7 @@ def evaluate(
                     score_start = time.time()
                     records = pending_future.result()
                     total_score_time += time.time() - score_start
-                    _apply_records(records, state, model_key, eval_name, ctr, pbar)
+                    _apply_records(records, state, model_key, eval_name, ctr, pbar, failure_types)
                     total_gen_tokens += pending_gen_tokens
                     _save_state_atomic(partial_file, state)
                 executor.shutdown(wait=False)
@@ -433,6 +434,7 @@ def evaluate(
                     "truncated": truncated_count,
                     "max_new_tokens": eval_max_tokens,
                     "metric": metric,
+                    "failure_types": dict(failure_types),
                     "_complete": True,
                 }
 
@@ -511,6 +513,7 @@ def _score_batch(eval_obj, batch_indices, batch_examples, outputs, use_pass_k, p
         sample_results = None
         error_tb = None
 
+        failure_type = None
         try:
             if use_pass_k:
                 sample_results = []
@@ -521,11 +524,13 @@ def _score_batch(eval_obj, batch_indices, batch_examples, outputs, use_pass_k, p
                         "score": s,
                         "parse_status": info.get("status", "unknown"),
                         "parsed": info.get("parsed"),
+                        "failure_type": info.get("failure_type"),
                     })
                 c = sum(1 for sr in sample_results if sr["score"] >= 1.0)
                 example_score = pass_at_k(len(sample_results), c, pass_k_val)
                 extracted = eval_obj.extract_answer(sample_outputs[0])
                 parse_status = sample_results[0]["parse_status"]
+                failure_type = sample_results[0].get("failure_type")
                 status = "ok" if example_score > 0 else "incorrect"
             else:
                 output_text = sample_outputs[0]
@@ -534,6 +539,7 @@ def _score_batch(eval_obj, batch_indices, batch_examples, outputs, use_pass_k, p
                 )
                 extracted = info.get("parsed") or eval_obj.extract_answer(output_text)
                 parse_status = info.get("status", "unknown")
+                failure_type = info.get("failure_type")
                 status = "ok" if example_score > 0 else "incorrect"
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
@@ -559,6 +565,7 @@ def _score_batch(eval_obj, batch_indices, batch_examples, outputs, use_pass_k, p
             "parse_status": parse_status,
             "score": example_score,
             "status": status,
+            "failure_type": failure_type,
             "truncated": was_truncated,
         }
         if sample_results is not None:
@@ -569,7 +576,7 @@ def _score_batch(eval_obj, batch_indices, batch_examples, outputs, use_pass_k, p
     return records
 
 
-def _apply_records(records, state, model_key, eval_name, ctr, pbar):
+def _apply_records(records, state, model_key, eval_name, ctr, pbar, failure_types=None):
     for record in records:
         state["examples"][model_key][eval_name].append(record)
         s = record["status"]
@@ -586,6 +593,9 @@ def _apply_records(records, state, model_key, eval_name, ctr, pbar):
             ctr["errored"] += 1
         if record.get("truncated"):
             ctr["truncated_count"] += 1
+        ft = record.get("failure_type")
+        if ft and failure_types is not None:
+            failure_types[ft] = failure_types.get(ft, 0) + 1
         pbar.update(1)
 
 
@@ -656,6 +666,7 @@ def quick_eval(
         total_gen_time = 0.0
         total_score_time = 0.0
         examples_list: list[dict] = []
+        qe_failure_types: dict[str, int] = {}
 
         for i in range(0, len(prompts), batch_size):
             chunk_prompts = prompts[i:i + batch_size]
@@ -683,6 +694,7 @@ def quick_eval(
             for ex, gen_result in zip(chunk_data, outputs):
                 example_score = 0.0
                 status = "error"
+                ft = None
                 try:
                     if use_pass_k:
                         sample_results = []
@@ -695,6 +707,7 @@ def quick_eval(
                         example_score, _info = eval_obj.score(
                             gen_result.text[0], ex["ground_truth"], example=ex,
                         )
+                        ft = _info.get("failure_type")
                     if example_score > 0:
                         correct += 1
                         status = "ok"
@@ -705,10 +718,13 @@ def quick_eval(
                 except Exception:
                     errored += 1
 
+                if ft:
+                    qe_failure_types[ft] = qe_failure_types.get(ft, 0) + 1
                 examples_list.append({
                     "example_id": ex["example_id"],
                     "score": example_score,
                     "status": status,
+                    "failure_type": ft,
                 })
             total_score_time += time.time() - score_start
 
@@ -738,6 +754,7 @@ def quick_eval(
             "incorrect": incorrect,
             "errored": errored,
             "metric": metric,
+            "failure_types": dict(qe_failure_types),
             "timing": {
                 "generation_seconds": round(total_gen_time, 1),
                 "scoring_seconds": round(total_score_time, 1),

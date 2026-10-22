@@ -30,6 +30,11 @@ def _detect_sandbox() -> str:
 
 
 def execute_code(code: str, test_code: str, timeout: int = 10) -> float:
+    score, _reason = execute_code_detailed(code, test_code, timeout)
+    return score
+
+
+def execute_code_detailed(code: str, test_code: str, timeout: int = 10) -> tuple[float, str]:
     full_code = code + "\n" + test_code
     sandbox = _detect_sandbox()
     if sandbox == "docker":
@@ -88,11 +93,11 @@ def _execute_subprocess(full_code: str, timeout: int) -> float:
             cwd=tempfile.gettempdir(),
             **kwargs,
         )
-        return 1.0 if result.returncode == 0 else 0.0
+        return (1.0, "pass") if result.returncode == 0 else (0.0, "fail")
     except subprocess.TimeoutExpired:
-        return 0.0
+        return 0.0, "timeout"
     except Exception:
-        return 0.0
+        return 0.0, "error"
     finally:
         try:
             os.unlink(temp_path)
@@ -123,11 +128,11 @@ def _execute_bwrap(full_code: str, timeout: int) -> float:
             timeout=timeout,
             cwd="/tmp",
         )
-        return 1.0 if result.returncode == 0 else 0.0
+        return (1.0, "pass") if result.returncode == 0 else (0.0, "fail")
     except subprocess.TimeoutExpired:
-        return 0.0
+        return 0.0, "timeout"
     except Exception:
-        return 0.0
+        return 0.0, "error"
     finally:
         try:
             os.unlink(temp_path)
@@ -135,7 +140,7 @@ def _execute_bwrap(full_code: str, timeout: int) -> float:
             pass
 
 
-def _execute_docker(full_code: str, timeout: int) -> float:
+def _execute_docker(full_code: str, timeout: int) -> tuple[float, str]:
     fd, temp_path = tempfile.mkstemp(suffix=".py", prefix="eval_exec_")
     try:
         with os.fdopen(fd, "w") as f:
@@ -155,11 +160,11 @@ def _execute_docker(full_code: str, timeout: int) -> float:
             capture_output=True,
             timeout=timeout + 10,
         )
-        return 1.0 if result.returncode == 0 else 0.0
+        return (1.0, "pass") if result.returncode == 0 else (0.0, "fail")
     except subprocess.TimeoutExpired:
-        return 0.0
+        return 0.0, "timeout"
     except Exception:
-        return 0.0
+        return 0.0, "error"
     finally:
         try:
             os.unlink(temp_path)

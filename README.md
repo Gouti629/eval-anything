@@ -1,4 +1,4 @@
-# eval-harness
+# eval-anything
 
 Lightweight LLM evaluation harness with vLLM-accelerated inference, resumable runs, and a Python API for training-loop integration.
 
@@ -14,25 +14,25 @@ pip install -e ".[test]"      # + test dependencies
 
 ```bash
 # Run all built-in benchmarks with vLLM (default)
-eval-harness --model Qwen/Qwen2.5-0.5B --eval_config default
+eval-anything --model Qwen/Qwen2.5-0.5B --eval_config default
 
 # Use HuggingFace backend (no CUDA needed)
-eval-harness --model Qwen/Qwen2.5-0.5B --eval_config default --backend hf --device cpu
+eval-anything --model Qwen/Qwen2.5-0.5B --eval_config default --backend hf --device cpu
 
 # Single benchmark inline
-eval-harness --model Qwen/Qwen2.5-0.5B \
+eval-anything --model Qwen/Qwen2.5-0.5B \
   --dataset openai/gsm8k --config main --split test \
   --question_field question --answer_field answer \
   --scorer number_extract --delimiter "####"
 
 # Multi-GPU with tensor parallelism
-eval-harness --model meta-llama/Llama-3-70B --eval_config default --tensor_parallel 4
+eval-anything --model meta-llama/Llama-3-70B --eval_config default --tensor_parallel 4
 
 # 5-shot prompting
-eval-harness --model Qwen/Qwen2.5-0.5B --eval_config default --few_shot 5
+eval-anything --model Qwen/Qwen2.5-0.5B --eval_config default --few_shot 5
 
 # Compare two result files
-eval-harness --compare results/run1.json results/run2.json
+eval-anything --compare results/run1.json results/run2.json
 ```
 
 ## Python API
@@ -74,6 +74,7 @@ for name, r in results.items():
 |---|---|---|---|
 | gsm8k | openai/gsm8k | number_extract | `####` delimiter |
 | math | EleutherAI/hendrycks_math | boxed_latex | 7 subject configs |
+| mmlu | cais/mmlu | letter_match | 57 subjects, knowledge retention |
 | mbpp | google-research-datasets/mbpp | code_exec | task_id 11–510 |
 | humaneval | openai/openai_humaneval | code_exec | Prepends prompt |
 | livecodebench_v5 | PrimeIntellect/LiveCodeBench-v5 | code_exec | stdin/func test types |

@@ -5,7 +5,7 @@ from eval_harness.runner import evaluate
 
 def main():
     parser = argparse.ArgumentParser(
-        prog="eval-harness",
+        prog="eval-anything",
         description="Lightweight LLM evaluation harness",
     )
     parser.add_argument(

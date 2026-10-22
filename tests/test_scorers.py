@@ -520,3 +520,79 @@ class TestNormalizeNumber:
 
     def test_scientific(self):
         assert _normalize_number("1.5e3") == 1500.0
+
+
+class TestFailureType:
+    def test_exact_match_correct(self):
+        _, info = exact_match("hello", "hello")
+        assert info["failure_type"] == "correct"
+
+    def test_exact_match_wrong(self):
+        _, info = exact_match("hello", "world")
+        assert info["failure_type"] == "wrong_answer"
+
+    def test_exact_match_empty(self):
+        _, info = exact_match("", "hello")
+        assert info["failure_type"] == "empty"
+
+    def test_number_extract_correct(self):
+        _, info = number_extract("The answer is 42", "42")
+        assert info["failure_type"] == "correct"
+
+    def test_number_extract_wrong(self):
+        _, info = number_extract("The answer is 43", "42")
+        assert info["failure_type"] == "wrong_answer"
+
+    def test_number_extract_no_number(self):
+        _, info = number_extract("I don't know", "42")
+        assert info["failure_type"] == "format_error"
+
+    def test_letter_match_correct(self):
+        _, info = letter_match("The answer is B", "B")
+        assert info["failure_type"] == "correct"
+
+    def test_letter_match_wrong(self):
+        _, info = letter_match("The answer is A", "B")
+        assert info["failure_type"] == "wrong_answer"
+
+    def test_letter_match_no_letter(self):
+        _, info = letter_match("I think the answer involves both options", "B")
+        assert info["failure_type"] == "format_error"
+
+    def test_boxed_latex_correct(self):
+        _, info = boxed_latex("So \\boxed{42}", "\\boxed{42}")
+        assert info["failure_type"] == "correct"
+
+    def test_boxed_latex_wrong(self):
+        _, info = boxed_latex("So \\boxed{43}", "\\boxed{42}")
+        assert info["failure_type"] == "wrong_answer"
+
+    def test_boxed_latex_missing(self):
+        _, info = boxed_latex("I don't know", "\\boxed{42}")
+        assert info["failure_type"] == "format_error"
+
+    def test_code_exec_correct(self):
+        _, info = code_exec("```python\ndef f(): return 1\n```", "assert f() == 1")
+        assert info["failure_type"] == "correct"
+
+    def test_code_exec_wrong(self):
+        _, info = code_exec("```python\ndef f(): return 2\n```", "assert f() == 1")
+        assert info["failure_type"] == "wrong_answer"
+
+    def test_code_exec_no_code(self):
+        _, info = code_exec("I can't write this function", "assert f() == 1")
+        assert info["failure_type"] == "format_error"
+
+
+class TestIndexToLetter:
+    def test_zero_to_a(self):
+        from eval_harness.evals.generic import _transform_index_to_letter
+        assert _transform_index_to_letter(0) == "A"
+
+    def test_three_to_d(self):
+        from eval_harness.evals.generic import _transform_index_to_letter
+        assert _transform_index_to_letter(3) == "D"
+
+    def test_from_string(self):
+        from eval_harness.evals.generic import _transform_index_to_letter
+        assert _transform_index_to_letter("1") == "B"
