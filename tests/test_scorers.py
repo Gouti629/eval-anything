@@ -1,7 +1,7 @@
 """Tests for all scoring functions — the most bug-prone part of the harness."""
 import pytest
 
-from eval_harness.rewards.scorers import (
+from eval_anything.rewards.scorers import (
     _strip_think,
     _extract_boxed,
     _extract_code,
@@ -238,11 +238,11 @@ class TestFractionRegression:
         assert score == 1.0
 
     def test_zero_denominator_handled(self):
-        from eval_harness.rewards.scorers import _normalize_number
+        from eval_anything.rewards.scorers import _normalize_number
         assert _normalize_number("1/0") is None
 
     def test_malformed_not_fraction(self):
-        from eval_harness.rewards.scorers import _normalize_number
+        from eval_anything.rewards.scorers import _normalize_number
         assert _normalize_number("abc") is None
 
 
@@ -586,13 +586,13 @@ class TestFailureType:
 
 class TestIndexToLetter:
     def test_zero_to_a(self):
-        from eval_harness.evals.generic import _transform_index_to_letter
+        from eval_anything.evals.generic import _transform_index_to_letter
         assert _transform_index_to_letter(0) == "A"
 
     def test_three_to_d(self):
-        from eval_harness.evals.generic import _transform_index_to_letter
+        from eval_anything.evals.generic import _transform_index_to_letter
         assert _transform_index_to_letter(3) == "D"
 
     def test_from_string(self):
-        from eval_harness.evals.generic import _transform_index_to_letter
+        from eval_anything.evals.generic import _transform_index_to_letter
         assert _transform_index_to_letter("1") == "B"

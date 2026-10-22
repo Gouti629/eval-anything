@@ -46,7 +46,7 @@ eval-anything --compare results/run1.json results/run2.json
 `quick_eval` accepts a pre-loaded model for use inside training loops:
 
 ```python
-from eval_harness import quick_eval
+from eval_anything import quick_eval
 
 # vLLM — tokenizer auto-extracted
 results = quick_eval(model=llm, eval_configs="default", limit=50)

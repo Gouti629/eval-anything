@@ -3,7 +3,7 @@ import os
 import platform
 import pytest
 
-from eval_harness.rewards.code_execution import (
+from eval_anything.rewards.code_execution import (
     execute_code, set_sandbox_mode, _detect_sandbox,
 )
 

@@ -1,7 +1,7 @@
 """Tests for auto_tune — memory-based batch/token estimation."""
 import pytest
 
-from eval_harness.utils.auto_tune import _snap_down, _STANDARD_BATCH_SIZES, _STANDARD_TOKEN_SIZES
+from eval_anything.utils.auto_tune import _snap_down, _STANDARD_BATCH_SIZES, _STANDARD_TOKEN_SIZES
 
 
 class TestSnapDown:
@@ -29,7 +29,7 @@ class TestSnapDown:
 
 class TestAutoTuneNoGPU:
     def test_both_given_passthrough(self):
-        from eval_harness.utils.auto_tune import auto_tune_params
+        from eval_anything.utils.auto_tune import auto_tune_params
 
         class FakeModel:
             pass
@@ -39,7 +39,7 @@ class TestAutoTuneNoGPU:
         assert mt == 1024
 
     def test_fallback_when_no_cuda(self):
-        from eval_harness.utils.auto_tune import auto_tune_params
+        from eval_anything.utils.auto_tune import auto_tune_params
         import torch
 
         class FakeModel:
@@ -51,7 +51,7 @@ class TestAutoTuneNoGPU:
             assert mt == 512
 
     def test_fallback_batch_auto(self):
-        from eval_harness.utils.auto_tune import auto_tune_params
+        from eval_anything.utils.auto_tune import auto_tune_params
         import torch
 
         class FakeModel:
@@ -63,7 +63,7 @@ class TestAutoTuneNoGPU:
             assert mt == 1024
 
     def test_fallback_tokens_auto(self):
-        from eval_harness.utils.auto_tune import auto_tune_params
+        from eval_anything.utils.auto_tune import auto_tune_params
         import torch
 
         class FakeModel:

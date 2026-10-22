@@ -15,10 +15,10 @@ from datetime import datetime
 import torch
 from tqdm import tqdm
 
-from eval_harness.evals.generic import GenericEval, config_fingerprint, validate_config
-from eval_harness.models import load_model
-from eval_harness.plotting.compare import plot_comparison, sanitize_model_name
-from eval_harness.utils.generation import batched_generate
+from eval_anything.evals.generic import GenericEval, config_fingerprint, validate_config
+from eval_anything.models import load_model
+from eval_anything.plotting.compare import plot_comparison, sanitize_model_name
+from eval_anything.utils.generation import batched_generate
 
 
 def pass_at_k(n: int, c: int, k: int) -> float:
@@ -135,7 +135,7 @@ def load_eval_configs(path_or_name: str) -> list[dict]:
     import importlib.resources
 
     if path_or_name == "default":
-        ref = importlib.resources.files("eval_harness").joinpath("default_evals.yaml")
+        ref = importlib.resources.files("eval_anything").joinpath("default_evals.yaml")
         text = ref.read_text(encoding="utf-8")
     else:
         with open(path_or_name) as f:
@@ -157,7 +157,7 @@ def _detect_backend(model) -> str:
 def _make_generate_fn(backend: str, model, tokenizer):
     """Return a unified generate(prompts, **kwargs) callable."""
     if backend == "hf":
-        from eval_harness.utils.generation_hf import batched_generate_hf
+        from eval_anything.utils.generation_hf import batched_generate_hf
 
         def _gen(prompts, **kw):
             return batched_generate_hf(model, tokenizer, prompts, **kw)
@@ -251,14 +251,14 @@ def evaluate(
             model_key = model_path
             print(f"\nLoading model: {model_path} (backend={backend})")
             if backend == "hf":
-                from eval_harness.models.loader_hf import load_model_hf
+                from eval_anything.models.loader_hf import load_model_hf
                 llm, tokenizer = load_model_hf(model_path, device=device)
             else:
                 llm, tokenizer = load_model(model_path, device=device,
                                             tensor_parallel_size=tensor_parallel_size)
 
             if auto_batch or auto_tokens:
-                from eval_harness.utils.auto_tune import auto_tune_params
+                from eval_anything.utils.auto_tune import auto_tune_params
                 batch_size, max_new_tokens = auto_tune_params(
                     llm, backend,
                     batch_size=None if auto_batch else batch_size,
@@ -656,7 +656,7 @@ def quick_eval(
         raise ValueError(f"limit must be >= 1, got {limit}")
 
     if batch_size is None or max_new_tokens is None:
-        from eval_harness.utils.auto_tune import auto_tune_params
+        from eval_anything.utils.auto_tune import auto_tune_params
         batch_size, max_new_tokens = auto_tune_params(
             model, backend, batch_size=batch_size, max_new_tokens=max_new_tokens,
         )
@@ -707,7 +707,7 @@ def quick_eval(
             except Exception as e:
                 total_gen_time += time.time() - gen_start
                 print(f"  Generation error in {eval_name}: {e}")
-                from eval_harness.utils.generation import GenerationResult
+                from eval_anything.utils.generation import GenerationResult
                 outputs = [GenerationResult(text=[""], token_count=0, truncated=False)
                            for _ in chunk_prompts]
 

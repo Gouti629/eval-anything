@@ -3,14 +3,14 @@ import os
 import pytest
 from unittest.mock import patch
 
-from eval_harness.cli import main
+from eval_anything.cli import main
 
 
 class TestCliParsing:
     def test_config_flag_is_string_not_list(self):
         """The old type=list bug split strings into characters."""
         import sys
-        with patch("eval_harness.cli.evaluate") as mock_eval:
+        with patch("eval_anything.cli.evaluate") as mock_eval:
             saved = sys.argv
             try:
                 sys.argv = ["eval-harness", "--model", "m", "--dataset", "d",
@@ -116,7 +116,7 @@ class TestCompareFlag:
 class TestFewShotFlags:
     def test_few_shot_in_config(self):
         import sys
-        with patch("eval_harness.cli.evaluate") as mock_eval:
+        with patch("eval_anything.cli.evaluate") as mock_eval:
             saved = sys.argv
             try:
                 sys.argv = [

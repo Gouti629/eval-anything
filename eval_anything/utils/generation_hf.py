@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from eval_harness.utils.generation import GenerationResult
+from eval_anything.utils.generation import GenerationResult
 
 
 def batched_generate_hf(

@@ -1,6 +1,6 @@
 import argparse
 
-from eval_harness.runner import evaluate
+from eval_anything.runner import evaluate
 
 
 def main():
@@ -68,7 +68,7 @@ def main():
     args = parser.parse_args()
 
     if args.compare:
-        from eval_harness.comparison import print_comparison
+        from eval_anything.comparison import print_comparison
         print_comparison(args.compare)
         return
 
@@ -76,7 +76,7 @@ def main():
         parser.error("--model is required when running evaluations")
 
     if args.sandbox != "auto":
-        from eval_harness.rewards.code_execution import set_sandbox_mode
+        from eval_anything.rewards.code_execution import set_sandbox_mode
         set_sandbox_mode(args.sandbox)
 
     temperature = args.temperature
@@ -143,7 +143,7 @@ def _resolve_eval_configs(args) -> list[dict]:
 
 
 def _load_eval_config(path: str) -> list[dict]:
-    from eval_harness.runner import load_eval_configs
+    from eval_anything.runner import load_eval_configs
     return load_eval_configs(path)
 
 

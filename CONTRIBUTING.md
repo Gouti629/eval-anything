@@ -2,7 +2,7 @@
 
 ## Adding a benchmark
 
-1. Add the eval definition to `eval_harness/default_evals.yaml`:
+1. Add the eval definition to `eval_anything/default_evals.yaml`:
 
 ```yaml
 - name: my_benchmark
@@ -20,7 +20,7 @@
 
 ## Adding a scorer
 
-1. Define a function in `eval_harness/rewards/scorers.py`:
+1. Define a function in `eval_anything/rewards/scorers.py`:
 
 ```python
 def my_scorer(output: str, ground_truth: str, **kwargs) -> tuple[float, dict]:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from eval_harness.rewards.code_execution import execute_code, execute_code_detailed
+from eval_anything.rewards.code_execution import execute_code, execute_code_detailed
 
 
 def _strip_think(text: str) -> str:

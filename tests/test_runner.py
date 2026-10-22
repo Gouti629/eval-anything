@@ -5,7 +5,7 @@ import tempfile
 
 import pytest
 
-from eval_harness.runner import (
+from eval_anything.runner import (
     pass_at_k,
     _save_state_atomic,
     _run_fingerprint,
@@ -111,7 +111,7 @@ class TestResumeByExampleId:
 
     def test_reordered_rows_still_matched(self):
         """If dataset rows are reordered, done examples should be found by example_id."""
-        from eval_harness.runner import _is_example_done
+        from eval_anything.runner import _is_example_done
         state = {
             "examples": {
                 "model1": {
@@ -128,7 +128,7 @@ class TestResumeByExampleId:
 
     def test_changed_content_not_matched(self):
         """If question or answer changes, different content hash -> not matched."""
-        from eval_harness.evals.generic import GenericEval
+        from eval_anything.evals.generic import GenericEval
         cfg = {"name": "t", "dataset": "d", "question_field": "q", "answer_field": "a"}
         ev = GenericEval(cfg)
         e1 = ev._normalize_row({"q": "What is 2+2?", "a": "4"}, 0)
@@ -136,7 +136,7 @@ class TestResumeByExampleId:
         assert e1["example_id"] != e2["example_id"]
 
     def test_same_content_same_id_regardless_of_index(self):
-        from eval_harness.evals.generic import GenericEval
+        from eval_anything.evals.generic import GenericEval
         cfg = {"name": "t", "dataset": "d", "question_field": "q", "answer_field": "a"}
         ev = GenericEval(cfg)
         e1 = ev._normalize_row({"q": "hello", "a": "world"}, 0)
@@ -150,21 +150,21 @@ class TestGenerationResult:
     """GenerationResult carries token count and truncation flag."""
 
     def test_fields_present(self):
-        from eval_harness.utils.generation import GenerationResult
+        from eval_anything.utils.generation import GenerationResult
         r = GenerationResult(text=["hello"], token_count=5, truncated=False)
         assert r.text == ["hello"]
         assert r.token_count == 5
         assert r.truncated is False
 
     def test_truncated_flag(self):
-        from eval_harness.utils.generation import GenerationResult
+        from eval_anything.utils.generation import GenerationResult
         r = GenerationResult(text=["hi"], token_count=512, truncated=True)
         assert r.truncated is True
 
 
 class TestPerEvalMaxNewTokens:
     def test_eval_max_tokens_in_config(self):
-        from eval_harness.evals.generic import GenericEval
+        from eval_anything.evals.generic import GenericEval
         cfg = {
             "name": "test", "dataset": "d",
             "question_field": "q", "answer_field": "a",
@@ -174,13 +174,13 @@ class TestPerEvalMaxNewTokens:
         assert ev.max_new_tokens == 256
 
     def test_eval_max_tokens_default_none(self):
-        from eval_harness.evals.generic import GenericEval
+        from eval_anything.evals.generic import GenericEval
         cfg = {"name": "test", "dataset": "d", "question_field": "q", "answer_field": "a"}
         ev = GenericEval(cfg)
         assert ev.max_new_tokens is None
 
     def test_max_tokens_override_changes_fingerprint(self):
-        from eval_harness.evals.generic import config_fingerprint
+        from eval_anything.evals.generic import config_fingerprint
         fp1 = config_fingerprint(
             {"dataset": "d", "max_new_tokens": 256}, {"max_new_tokens": 512}
         )
@@ -221,7 +221,7 @@ class TestPlotComparison:
 
     def test_different_eval_subsets_no_crash(self):
         import tempfile
-        from eval_harness.plotting.compare import plot_comparison
+        from eval_anything.plotting.compare import plot_comparison
         results = {
             "model_a": {
                 "gsm8k": {"score": 0.8},
@@ -238,7 +238,7 @@ class TestPlotComparison:
 
     def test_no_shared_evals(self):
         import tempfile
-        from eval_harness.plotting.compare import plot_comparison
+        from eval_anything.plotting.compare import plot_comparison
         results = {
             "model_a": {"gsm8k": {"score": 0.8}},
             "model_b": {"mmlu": {"score": 0.6}},
@@ -258,7 +258,7 @@ class TestLimitOption:
         assert fp1 != fp2
 
     def test_limit_zero_raises(self):
-        from eval_harness.runner import evaluate
+        from eval_anything.runner import evaluate
         with pytest.raises(ValueError, match="limit must be >= 1"):
             evaluate(
                 models=["m"], eval_configs=[{"name": "t", "dataset": "d",
@@ -267,7 +267,7 @@ class TestLimitOption:
             )
 
     def test_limit_negative_raises(self):
-        from eval_harness.runner import evaluate
+        from eval_anything.runner import evaluate
         with pytest.raises(ValueError, match="limit must be >= 1"):
             evaluate(
                 models=["m"], eval_configs=[{"name": "t", "dataset": "d",
@@ -322,9 +322,9 @@ class TestMakeGenerateFn:
         class FakeModel:
             llm_engine = object()
 
-        from eval_harness.utils.generation import GenerationResult
+        from eval_anything.utils.generation import GenerationResult
 
-        original = __import__("eval_harness.utils.generation", fromlist=["batched_generate"])
+        original = __import__("eval_anything.utils.generation", fromlist=["batched_generate"])
 
         gen_fn = _make_generate_fn("vllm", FakeModel(), None)
         assert callable(gen_fn)
@@ -343,7 +343,7 @@ class TestBackendInFingerprint:
 
 class TestQuickEvalValidation:
     def test_missing_tokenizer_for_hf(self):
-        from eval_harness.runner import quick_eval
+        from eval_anything.runner import quick_eval
 
         class FakeHF:
             pass
@@ -355,7 +355,7 @@ class TestQuickEvalValidation:
             }])
 
     def test_invalid_limit(self):
-        from eval_harness.runner import quick_eval
+        from eval_anything.runner import quick_eval
 
         class FakeVllm:
             llm_engine = object()
@@ -369,7 +369,7 @@ class TestQuickEvalValidation:
             }])
 
     def test_invalid_config(self):
-        from eval_harness.runner import quick_eval
+        from eval_anything.runner import quick_eval
 
         class FakeVllm:
             llm_engine = object()
@@ -382,7 +382,7 @@ class TestQuickEvalValidation:
 
 class TestCompareRuns:
     def test_two_run_comparison(self):
-        from eval_harness.comparison import compare_runs
+        from eval_anything.comparison import compare_runs
         with tempfile.TemporaryDirectory() as d:
             r1 = {"results": {"model_a": {"gsm8k": {"score": 0.5}, "arc": {"score": 0.6}}}}
             r2 = {"results": {"model_b": {"gsm8k": {"score": 0.7}, "arc": {"score": 0.4}}}}
@@ -401,7 +401,7 @@ class TestCompareRuns:
             assert data["deltas"]["arc"] == pytest.approx(-0.2)
 
     def test_single_run_no_deltas(self):
-        from eval_harness.comparison import compare_runs
+        from eval_anything.comparison import compare_runs
         with tempfile.TemporaryDirectory() as d:
             r1 = {"results": {"model_a": {"gsm8k": {"score": 0.5}}}}
             p1 = os.path.join(d, "r1.json")
@@ -412,7 +412,7 @@ class TestCompareRuns:
             assert "deltas" not in data
 
     def test_mismatched_evals(self):
-        from eval_harness.comparison import compare_runs
+        from eval_anything.comparison import compare_runs
         with tempfile.TemporaryDirectory() as d:
             r1 = {"results": {"m": {"gsm8k": {"score": 0.5}}}}
             r2 = {"results": {"m": {"arc": {"score": 0.7}}}}
@@ -428,7 +428,7 @@ class TestCompareRuns:
             assert data["deltas"]["arc"] is None
 
     def test_print_comparison_no_crash(self):
-        from eval_harness.comparison import print_comparison
+        from eval_anything.comparison import print_comparison
         with tempfile.TemporaryDirectory() as d:
             r1 = {"results": {"m": {"gsm8k": {"score": 0.5}}}}
             r2 = {"results": {"m": {"gsm8k": {"score": 0.7}}}}
@@ -443,14 +443,14 @@ class TestCompareRuns:
 
 class TestCallbackTypeHint:
     def test_callback_param_annotated(self):
-        from eval_harness.runner import quick_eval
+        from eval_anything.runner import quick_eval
         import inspect
         sig = inspect.signature(quick_eval)
         p = sig.parameters["callback"]
         assert p.default is None
 
     def test_tensor_parallel_param_exists(self):
-        from eval_harness.runner import evaluate
+        from eval_anything.runner import evaluate
         import inspect
         sig = inspect.signature(evaluate)
         p = sig.parameters["tensor_parallel_size"]
@@ -460,7 +460,7 @@ class TestCallbackTypeHint:
 class TestPlotMissingEvals:
     def test_missing_eval_uses_nan(self):
         import numpy as np
-        from eval_harness.plotting.compare import plot_comparison
+        from eval_anything.plotting.compare import plot_comparison
         results = {
             "model_a": {"gsm8k": {"score": 0.5}},
             "model_b": {"gsm8k": {"score": 0.7}, "arc": {"score": 0.4}},

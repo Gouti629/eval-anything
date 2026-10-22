@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "eval-anything"
 version = "0.1.0"
 description = "Lightweight LLM evaluation harness with vLLM-accelerated inference"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 readme = "README.md"
 license = {text = "MIT"}
 classifiers = [
@@ -35,11 +35,11 @@ vllm = ["vllm>=0.6.0"]
 test = ["pytest>=7.0"]
 
 [project.scripts]
-eval-anything = "eval_harness.cli:main"
-eval-harness = "eval_harness.cli:main"
+eval-anything = "eval_anything.cli:main"
+eval-harness = "eval_anything.cli:main"
 
 [tool.setuptools.package-data]
-eval_harness = ["*.yaml"]
+eval_anything = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

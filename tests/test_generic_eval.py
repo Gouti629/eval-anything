@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from eval_harness.evals.generic import (
+from eval_anything.evals.generic import (
     GenericEval, validate_config, config_fingerprint, ConfigError,
     _safe_eval_filter, _transform_livecodebench_tests, _extract_func_name,
 )

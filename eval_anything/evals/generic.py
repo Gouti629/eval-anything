@@ -8,7 +8,7 @@ import re
 
 from datasets import load_dataset
 
-from eval_harness.rewards.scorers import SCORERS, _strip_think
+from eval_anything.rewards.scorers import SCORERS, _strip_think
 
 
 _REQUIRED_FIELDS = {"name", "dataset", "question_field", "answer_field"}
@@ -413,19 +413,19 @@ class GenericEval:
         if self.scorer_name == "number_extract":
             if self.delimiter and self.delimiter in clean:
                 after = clean.split(self.delimiter)[-1].strip()
-                from eval_harness.rewards.scorers import _NUMBER_RE
+                from eval_anything.rewards.scorers import _NUMBER_RE
                 nums = _NUMBER_RE.findall(after)
                 return nums[0] if nums else after[:50] or None
-            from eval_harness.rewards.scorers import _NUMBER_RE
+            from eval_anything.rewards.scorers import _NUMBER_RE
             numbers = _NUMBER_RE.findall(clean)
             return numbers[-1] if numbers else None
         if self.scorer_name == "boxed_latex":
-            from eval_harness.rewards.scorers import _extract_boxed
+            from eval_anything.rewards.scorers import _extract_boxed
             return _extract_boxed(clean)
         if self.scorer_name == "letter_match":
             _, info = self._scorer_fn(generated, "X")
             return info.get("parsed")
         if self.scorer_name == "code_exec":
-            from eval_harness.rewards.scorers import _extract_code
+            from eval_anything.rewards.scorers import _extract_code
             return _extract_code(clean)
         return clean.strip()[:100] if clean else None

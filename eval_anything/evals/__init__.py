@@ -1,3 +1,3 @@
-from eval_harness.evals.generic import GenericEval
+from eval_anything.evals.generic import GenericEval
 
 __all__ = ["GenericEval"]

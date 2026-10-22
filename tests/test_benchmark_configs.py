@@ -8,11 +8,11 @@ import pytest
 import yaml
 import importlib.resources
 
-from eval_harness.evals.generic import GenericEval, ConfigError
+from eval_anything.evals.generic import GenericEval, ConfigError
 
 
 def _load_default_configs():
-    ref = importlib.resources.files("eval_harness").joinpath("default_evals.yaml")
+    ref = importlib.resources.files("eval_anything").joinpath("default_evals.yaml")
     text = ref.read_text(encoding="utf-8")
     return yaml.safe_load(text)
 
