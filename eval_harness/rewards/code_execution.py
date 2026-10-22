@@ -26,8 +26,6 @@ def _detect_sandbox() -> str:
         return _sandbox_mode
     if platform.system() != "Windows" and shutil.which("bwrap"):
         return "bwrap"
-    if shutil.which("docker"):
-        return "docker"
     return "none"
 
 
