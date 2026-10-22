@@ -21,6 +21,10 @@ def _get_model_params(model, backend: str) -> tuple[int, int, int]:
 
     num_layers = getattr(cfg, "num_hidden_layers", None) or getattr(cfg, "n_layer", 32)
     hidden_size = getattr(cfg, "hidden_size", None) or getattr(cfg, "n_embd", 4096)
+    num_kv_heads = getattr(cfg, "num_key_value_heads", None)
+    num_heads = getattr(cfg, "num_attention_heads", None)
+    head_dim = hidden_size // num_heads if num_heads else 128
+    kv_dim = num_kv_heads * head_dim if num_kv_heads else hidden_size
 
     dtype = None
     if backend == "vllm":
@@ -37,7 +41,7 @@ def _get_model_params(model, backend: str) -> tuple[int, int, int]:
         torch.float32: 4, torch.float64: 8, torch.int8: 1,
     }
     dtype_bytes = bytes_map.get(dtype, 2)
-    return num_layers, hidden_size, dtype_bytes
+    return num_layers, kv_dim, dtype_bytes
 
 
 def auto_tune_params(

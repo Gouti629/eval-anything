@@ -5,6 +5,7 @@ import hashlib
 import json
 import operator
 import re
+from collections.abc import Callable
 
 from datasets import load_dataset
 
@@ -65,7 +66,7 @@ def _transform_index_to_letter(raw_value) -> str:
     return "ABCDEFGHIJKLMNOP"[idx]
 
 
-_ANSWER_TRANSFORMS: dict[str, callable] = {
+_ANSWER_TRANSFORMS: dict[str, Callable] = {
     "livecodebench_tests": _transform_livecodebench_tests,
     "index_to_letter": _transform_index_to_letter,
 }

@@ -1,7 +1,7 @@
 """Tests for auto_tune — memory-based batch/token estimation."""
 import pytest
 
-from eval_anything.utils.auto_tune import _snap_down, _STANDARD_BATCH_SIZES, _STANDARD_TOKEN_SIZES
+from eval_anything.utils.auto_tune import _snap_down, _get_model_params, _STANDARD_BATCH_SIZES, _STANDARD_TOKEN_SIZES
 
 
 class TestSnapDown:
@@ -25,6 +25,35 @@ class TestSnapDown:
 
     def test_token_large(self):
         assert _snap_down(10000, _STANDARD_TOKEN_SIZES) == 8192
+
+
+class TestGQAAware:
+    def test_gqa_uses_kv_heads(self):
+        class FakeCfg:
+            num_hidden_layers = 32
+            hidden_size = 4096
+            num_attention_heads = 32
+            num_key_value_heads = 8
+
+        class FakeModel:
+            config = FakeCfg()
+
+        num_layers, kv_dim, dtype_bytes = _get_model_params(FakeModel(), "hf")
+        assert num_layers == 32
+        assert kv_dim == 8 * (4096 // 32)  # 8 KV heads * 128 head_dim = 1024
+        assert dtype_bytes == 2
+
+    def test_mha_falls_back_to_hidden_size(self):
+        class FakeCfg:
+            num_hidden_layers = 24
+            hidden_size = 2048
+            num_attention_heads = 16
+
+        class FakeModel:
+            config = FakeCfg()
+
+        _, kv_dim, _ = _get_model_params(FakeModel(), "hf")
+        assert kv_dim == 2048
 
 
 class TestAutoTuneNoGPU:

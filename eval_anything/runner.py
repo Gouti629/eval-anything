@@ -18,31 +18,26 @@ from tqdm import tqdm
 from eval_anything.evals.generic import GenericEval, config_fingerprint, validate_config
 from eval_anything.models import load_model
 from eval_anything.plotting.compare import plot_comparison, sanitize_model_name
+from eval_anything.utils.checkpoint import (
+    find_matching_partial,
+    final_path,
+    is_example_done,
+    partial_path,
+    save_state_atomic,
+)
 from eval_anything.utils.generation import batched_generate
+
+_save_state_atomic = save_state_atomic
+_partial_path = partial_path
+_final_path = final_path
+_find_matching_partial = find_matching_partial
+_is_example_done = is_example_done
 
 
 def pass_at_k(n: int, c: int, k: int) -> float:
     if n - c < k:
         return 1.0
     return 1.0 - math.comb(n - c, k) / math.comb(n, k)
-
-
-def _save_state_atomic(path: str, state: dict):
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(state, f, indent=2)
-    if platform.system() == "Windows":
-        if os.path.exists(path):
-            os.remove(path)
-    os.rename(tmp, path)
-
-
-def _partial_path(output_dir: str, fingerprint: str) -> str:
-    return os.path.join(output_dir, f"{fingerprint}.partial.json")
-
-
-def _final_path(output_dir: str, timestamp: str) -> str:
-    return os.path.join(output_dir, f"{timestamp}.json")
 
 
 def _run_fingerprint(models: list[str], eval_configs: list[dict], gen_params: dict, think: bool = False) -> str:
@@ -53,26 +48,6 @@ def _run_fingerprint(models: list[str], eval_configs: list[dict], gen_params: di
         "think": think,
     }
     return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()[:16]
-
-
-def _find_matching_partial(output_dir: str, fingerprint: str) -> dict | None:
-    path = _partial_path(output_dir, fingerprint)
-    if os.path.exists(path):
-        try:
-            with open(path) as f:
-                state = json.load(f)
-            if state.get("fingerprint") == fingerprint:
-                return state
-        except (json.JSONDecodeError, KeyError):
-            pass
-    return None
-
-
-def _is_example_done(state: dict, model_key: str, eval_name: str, example_id: str) -> bool:
-    examples = state.get("examples", {})
-    model_examples = examples.get(model_key, {})
-    eval_examples = model_examples.get(eval_name, [])
-    return any(ex.get("example_id") == example_id for ex in eval_examples)
 
 
 def _build_manifest(models, eval_configs, gen_params, device, think, backend="vllm"):
@@ -627,7 +602,7 @@ def quick_eval(
     pass_k: int | None = None,
     think: bool = False,
     output_dir: str | None = None,
-    callback: "Callable[[dict], None] | None" = None,
+    callback: Callable[[dict], None] | None = None,
 ) -> dict:
     """Run evaluations on a pre-loaded model and return results.
 
